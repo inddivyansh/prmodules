@@ -119,34 +119,36 @@ for _k, _v in _env_snap().items():
 
 # ── Helper functions ──────────────────────────────────────────────────────────
 def _save_env() -> None:
+    """Write ONLY credentials to .env — nothing else lives here."""
     lines = [
-        "# Instagram Credentials",
+        "# Instagram Credentials (only sensitive data lives here)",
         f"INSTAGRAM_USERNAME={st.session_state.ig_username}",
         f"INSTAGRAM_PASSWORD={st.session_state.ig_password}",
-        "",
-        "# Hashtag Sources",
-        f"NEGATIVE_HASHTAGS={st.session_state.neg_hashtags}",
-        f"POSITIVE_HASHTAGS={st.session_state.pos_hashtags}",
-        "",
-        "# Keyword Sources",
-        f"SEARCH_KEYWORDS={st.session_state.keywords}",
-        "",
-        "# AI Model",
-        f"OLLAMA_MODEL={st.session_state.ollama_model}",
-        "",
-        "# Bot Behaviour",
-        f"DETECTION_STRATEGY={st.session_state.strategy}",
-        f"MAX_POSTS_TO_SCAN_PER_SOURCE={st.session_state.max_per_source}",
-        f"MAX_COMMENTS_PER_SESSION={st.session_state.max_comments}",
-        f"DELAY_BETWEEN_COMMENTS_SECONDS={st.session_state.delay_seconds}",
-        "MAX_COMMENT_LENGTH=220",
-        f"COMMENT_PREFIX={st.session_state.comment_prefix}",
-        f"MAX_POST_AGE_DAYS={st.session_state.max_age_days}",
-        f"HEADLESS={'true' if st.session_state.headless else 'false'}",
-        f"ENABLE_TRENDING_NEWS={'true' if st.session_state.enable_trending else 'false'}",
-        f"SHUFFLE_SOURCES={'true' if st.session_state.shuffle_sources else 'false'}",
     ]
     (ROOT / ".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _save_config() -> None:
+    """Write all bot settings to bot_config.json — dashboard is the source of truth."""
+    cfg = {
+        "model":              st.session_state.ollama_model,
+        "strategy":           st.session_state.strategy,
+        "max_per_source":     st.session_state.max_per_source,
+        "max_comments":       st.session_state.max_comments,
+        "delay_seconds":      st.session_state.delay_seconds,
+        "max_comment_length": 220,
+        "max_age_days":       st.session_state.max_age_days,
+        "headless":           st.session_state.headless,
+        "comment_prefix":     st.session_state.comment_prefix,
+        "enable_trending":    st.session_state.enable_trending,
+        "shuffle_sources":    st.session_state.shuffle_sources,
+        "neg_hashtags":       st.session_state.neg_hashtags,
+        "pos_hashtags":       st.session_state.pos_hashtags,
+        "keywords":           st.session_state.keywords,
+    }
+    (ROOT / "bot_config.json").write_text(
+        json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 def _cookie_status() -> tuple[bool, str]:
@@ -171,6 +173,7 @@ def _bot_alive() -> bool:
 
 def _launch_bot() -> None:
     _save_env()
+    _save_config()
     p = subprocess.Popen(
         [sys.executable, str(ROOT / "bot.py")],
         cwd=str(ROOT), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -393,6 +396,7 @@ with tab_bot:
         st.session_state.shuffle_sources = shuffle_val
         st.session_state.comment_prefix  = prefix_val
         st.session_state.dry_run         = dry_run_val
+        _save_config()  # persist to bot_config.json immediately
 
     lc1, lc2, lc3 = st.columns([2, 1, 1])
     with lc1:
@@ -410,7 +414,7 @@ with tab_bot:
                 _stop_bot(); st.warning("Bot session terminated."); st.rerun()
     with lc2:
         if st.button("💾  Save Config", use_container_width=True):
-            _sync(); _save_env(); st.success("Saved to .env!")
+            _sync(); st.success("Saved to bot_config.json!")
     with lc3:
         if st.button("🔄  Refresh", use_container_width=True):
             st.rerun()

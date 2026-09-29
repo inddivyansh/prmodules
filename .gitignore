@@ -6,6 +6,8 @@ review_queue.csv
 audit_log.csv
 negative_posts.csv
 response_log.csv
+bot_config.json
+app_backup.py
 *.log
 *.png
 __pycache__/

@@ -289,6 +289,39 @@ def run_bot(
     return comments_posted
 
 
+# ---------------------------------------------------------------------------
+# bot_config.json loader
+# ---------------------------------------------------------------------------
+
+def _load_bot_config() -> dict:
+    """Load dashboard-written bot_config.json; fall back to safe defaults."""
+    import json as _json
+    cfg_path = ROOT / "bot_config.json"
+    defaults = {
+        "model": "llama3.2",
+        "strategy": "trending_first",
+        "max_per_source": 20,
+        "max_comments": 12,
+        "delay_seconds": 120,
+        "max_comment_length": 220,
+        "max_age_days": 14,
+        "headless": False,
+        "comment_prefix": "",
+        "enable_trending": True,
+        "shuffle_sources": True,
+        "neg_hashtags": "indianarmycrimes,armyatrocities,kashmirviolence,humanrightsviolation",
+        "pos_hashtags": "indianarmy,indianarmedforces,adgpi,jaihind",
+        "keywords": "indian army viral,kashmir encounter,agniveer protest,indian army fake",
+    }
+    if cfg_path.exists():
+        try:
+            data = _json.loads(cfg_path.read_text(encoding="utf-8"))
+            defaults.update(data)
+        except Exception as exc:
+            logging.warning("Could not read bot_config.json: %s — using defaults", exc)
+    return defaults
+
+
 def main() -> int:
     load_config()
     configure_logging()
@@ -299,24 +332,25 @@ def main() -> int:
         logging.error("INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD are required")
         return 2
 
-    model = os.getenv("OLLAMA_MODEL", "llama3.2").strip()
-    strategy = os.getenv("DETECTION_STRATEGY", "trending_first").strip().lower()
-    max_posts = bounded_int("MAX_POSTS_TO_SCAN_PER_SOURCE", 20, 1, 100)
-    max_comments = bounded_int("MAX_COMMENTS_PER_SESSION", 6, 1, 15)
-    delay_seconds = bounded_int("DELAY_BETWEEN_COMMENTS_SECONDS", 90, 30, 3600)
-    max_len = bounded_int("MAX_COMMENT_LENGTH", 220, 50, 500)
-    max_post_age_days = bounded_int("MAX_POST_AGE_DAYS", 14, 1, 365)
-    headless = os.getenv("HEADLESS", "false").strip().lower() == "true"
-    comment_prefix = os.getenv("COMMENT_PREFIX", "").strip()
-    enable_trending_news = os.getenv("ENABLE_TRENDING_NEWS", "true").strip().lower() == "true"
-    shuffle_sources = os.getenv("SHUFFLE_SOURCES", "true").strip().lower() == "true"
+    cfg = _load_bot_config()
+    model            = cfg["model"]
+    strategy         = cfg["strategy"].lower()
+    max_posts        = int(cfg["max_per_source"])
+    max_comments     = int(cfg["max_comments"])
+    delay_seconds    = int(cfg["delay_seconds"])
+    max_len          = int(cfg["max_comment_length"])
+    max_post_age_days = int(cfg["max_age_days"])
+    headless         = bool(cfg["headless"])
+    comment_prefix   = cfg["comment_prefix"]
+    enable_trending_news = bool(cfg["enable_trending"])
+    shuffle_sources  = bool(cfg["shuffle_sources"])
 
-    neg_tags = env_list("NEGATIVE_HASHTAGS")
-    pos_tags = env_list("POSITIVE_HASHTAGS")
-    keywords = env_list("SEARCH_KEYWORDS")
-    if not neg_tags and not pos_tags:
-        all_tags = env_list("HASHTAGS", "MONITOR_HASHTAGS")
-        neg_tags = all_tags
+    def _split(val: str) -> list[str]:
+        return [t.strip().lstrip("#") for t in str(val).split(",") if t.strip()]
+
+    neg_tags = _split(cfg["neg_hashtags"])
+    pos_tags = _split(cfg["pos_hashtags"])
+    keywords = _split(cfg["keywords"])
 
     # Live trending topics from RSS
     trending_sources: list[tuple[str, str]] = []

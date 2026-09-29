@@ -47,7 +47,13 @@ from shared import (
     read_existing_media_ids,
     update_post_status,
 )
-from vpn_manager import get_current_ip, rotate_vpn
+from vpn_manager import get_current_ip, get_ip_details, rotate_vpn
+from account_tracker import (
+    get_account_record,
+    is_account_cooling,
+    record_session_end,
+    record_session_start,
+)
 
 
 
@@ -413,6 +419,7 @@ def main() -> int:
     vpn_cmd          = str(cfg.get("vpn_rotate_command", "")).strip()
     vpn_cooldown     = int(cfg.get("vpn_cooldown_seconds", 8))
     comments_per_account = int(cfg.get("comments_per_account", 3))
+    account_cooldown_min = int(cfg.get("account_cooldown_minutes", 15))
 
     def _split(val: str) -> list[str]:
         return [t.strip().lstrip("#") for t in str(val).split(",") if t.strip()]
@@ -469,6 +476,13 @@ def main() -> int:
         acct_user, acct_pwd = accounts[account_idx]
         remaining_budget = min(comments_per_account, max_comments - total_comments_posted)
 
+        # Optimization: Check if account is in safety cooldown period
+        is_cooling, rem_sec = is_account_cooling(acct_user, cooldown_minutes=account_cooldown_min)
+        if is_cooling and len(accounts) > 1:
+            logging.info("Account @%s in safety cooldown (%ds remaining) — cycling to next ID", acct_user, rem_sec)
+            account_idx += 1
+            continue
+
         logging.info(
             "══════════════════════════════════════════════════════════════\n"
             "  SWITCHING ACCOUNT [%d/%d]: @%s (budget: %d comment(s))\n"
@@ -476,25 +490,38 @@ def main() -> int:
             account_idx + 1, len(accounts), acct_user, remaining_budget
         )
 
+        current_ip = "UNKNOWN"
+        current_loc = ""
         if enable_vpn:
-            logging.info("[Multi-Account] Triggering VPN rotation before launching @%s...", acct_user)
+            logging.info("[Multi-Account] Rotating VPN network connection before launching @%s...", acct_user)
             vpn_res = rotate_vpn(command=vpn_cmd, cooldown_seconds=vpn_cooldown)
+            current_ip = str(vpn_res.get("new_ip", "UNKNOWN"))
+            current_loc = str(vpn_res.get("location", ""))
             logging.info("[Multi-Account] %s", vpn_res.get("message", "VPN rotation finished"))
+        else:
+            net_info = get_ip_details(timeout=2.5)
+            current_ip = str(net_info.get("ip", "UNKNOWN"))
+            current_loc = str(net_info.get("summary", ""))
+
+        record_session_start(acct_user, ip=current_ip, location=current_loc)
 
         p_cookie, a_cookie = get_cookies_file(acct_user)
         cookies_exist = p_cookie.exists() or a_cookie.exists()
         is_headless = headless and cookies_exist
 
         if not is_headless:
-            logging.info("Opening visible automated Chrome browser for @%s (human verification ready)...", acct_user)
+            logging.info("Opening visible Chrome browser with dedicated profile for @%s...", acct_user)
         else:
-            logging.info("Starting Chrome in headless mode for @%s (session cookies present)...", acct_user)
+            logging.info("Starting Chrome in headless mode for @%s (dedicated profile ready)...", acct_user)
 
         driver = None
+        posted = 0
         try:
-            driver = create_driver(is_headless)
+            # Dedicated virtual browser profile per account to prevent device fingerprint flagging
+            driver = create_driver(is_headless, username=acct_user)
             if not login_instagram(driver, acct_user, acct_pwd):
-                logging.warning("Skipping @%s due to login failure", acct_user)
+                logging.warning("Skipping @%s due to login/checkpoint challenge", acct_user)
+                record_session_end(acct_user, comments_posted=0, status="challenge_required", error="Authentication challenge")
                 account_idx += 1
                 continue
 
@@ -516,10 +543,12 @@ def main() -> int:
                 my_username=acct_user,
             )
             total_comments_posted += posted
+            record_session_end(acct_user, comments_posted=posted, status="cooling" if posted > 0 else "ready")
             logging.info("Account @%s session completed — posted %d comment(s)", acct_user, posted)
 
         except Exception as exc:
             logging.error("Session error on @%s: %s", acct_user, exc)
+            record_session_end(acct_user, comments_posted=posted, status="failed", error=str(exc))
         finally:
             if driver:
                 try:
@@ -531,8 +560,8 @@ def main() -> int:
 
         account_idx += 1
         if total_comments_posted < max_comments and account_idx < len(accounts):
-            logging.info("Account cooldown: waiting 8s before rotating to next account...")
-            time.sleep(8)
+            logging.info("Inter-account pacing: waiting 10s before launching next profile...")
+            time.sleep(10)
 
     logging.info("All bot sessions completed — posted %d total comment(s)", total_comments_posted)
     return 0

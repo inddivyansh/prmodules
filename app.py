@@ -29,11 +29,13 @@ from shared import (
     RESPONSE_LOG_CSV,
     ROOT,
     fetch_trending_topics,
+    get_cookies_file,
     load_accounts,
     load_seen_posts,
     read_negative_posts_csv,
 )
-from vpn_manager import detect_installed_vpn, get_current_ip, rotate_vpn
+from vpn_manager import detect_installed_vpn, get_current_ip, get_ip_details, rotate_vpn
+from account_tracker import get_account_record, get_all_account_telemetry, is_account_cooling
 
 # ---------------------------------------------------------------------------
 # Page configuration
@@ -213,6 +215,7 @@ DEFAULT_CONFIG = {
     "vpn_rotate_command": "",
     "vpn_cooldown_seconds": 8,
     "comments_per_account": 3,
+    "account_cooldown_minutes": 15,
     "neg_hashtags": "indianarmycrimes,armyatrocities,kashmirviolence,humanrightsviolation",
     "pos_hashtags": "indianarmy,indianarmedforces,adgpi,jaihind",
     "keywords": "indian army viral,kashmir encounter,agniveer protest,indian army fake",
@@ -279,6 +282,7 @@ if "initialized" not in st.session_state:
     st.session_state.vpn_rotate_command = str(saved_cfg.get("vpn_rotate_command", ""))
     st.session_state.vpn_cooldown_seconds = int(saved_cfg.get("vpn_cooldown_seconds", 8))
     st.session_state.comments_per_account = int(saved_cfg.get("comments_per_account", 3))
+    st.session_state.account_cooldown_minutes = int(saved_cfg.get("account_cooldown_minutes", 15))
     st.session_state.neg_hashtags = str(saved_cfg.get("neg_hashtags", DEFAULT_CONFIG["neg_hashtags"]))
     st.session_state.pos_hashtags = str(saved_cfg.get("pos_hashtags", DEFAULT_CONFIG["pos_hashtags"]))
     st.session_state.keywords = str(saved_cfg.get("keywords", DEFAULT_CONFIG["keywords"]))
@@ -572,7 +576,20 @@ with tab_bot:
 
         # Multi-Account & VPN Rotation Section
         with st.expander("Multi-Account Rotation & Automated VPN Switching", expanded=False):
-            st.caption("Rotate between multiple Instagram accounts with isolated sessions and automatically switch VPN connections before each ID.")
+            st.caption("Rotate between multiple Instagram accounts with isolated browser profiles and dynamic VPN network switching.")
+
+            # Network egress telemetry
+            net_info = get_ip_details(timeout=2.0)
+            st.markdown(
+                f"""<div style="background:#0d131f; border:1px solid #1e293b; border-radius:6px; padding:10px 14px; margin-bottom:12px;">
+                    <div style="color:#94a3b8; font-size:0.72rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;">Current Public Network Egress</div>
+                    <div style="display:flex; align-items:baseline; gap:8px; margin-top:2px;">
+                        <span style="font-family:'JetBrains Mono',monospace; font-size:1.1rem; font-weight:600; color:#38bdf8;">{net_info.get('ip', 'UNKNOWN')}</span>
+                        <span style="color:#94a3b8; font-size:0.85rem;">&bull; {net_info.get('summary', '')}</span>
+                    </div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
 
             raw_accounts = ACCOUNTS_FILE.read_text(encoding="utf-8") if ACCOUNTS_FILE.exists() else ""
             ui_accounts = st.text_area(
@@ -595,7 +612,7 @@ with tab_bot:
                     "Enable Automated VPN Rotation",
                     value=st.session_state.enable_vpn_rotation,
                     key="cfg_enable_vpn",
-                    help="Trigger VPN rotation command before switching to each account.",
+                    help="Trigger dynamic VPN rotation command before switching to each account.",
                 )
                 ui_cpa = st.number_input(
                     "Comments per Account before rotating",
@@ -606,27 +623,37 @@ with tab_bot:
                     key="cfg_comments_per_acct",
                 )
             with v_col2:
-                ui_vpn_cmd = st.text_input(
-                    "VPN Rotation Command (or script)",
-                    value=st.session_state.vpn_rotate_command,
-                    placeholder="e.g. python vpn_manager.py rotate",
-                    key="cfg_vpn_cmd",
-                    help="CLI command or script executed prior to launching each account. Leave blank to auto-detect installed CLIs (Windscribe, Proton, WARP) or rotate_vpn.bat.",
+                ui_acct_cooldown = st.number_input(
+                    "Account Safety Cooldown (minutes)",
+                    min_value=0,
+                    max_value=180,
+                    value=int(st.session_state.account_cooldown_minutes),
+                    step=5,
+                    key="cfg_acct_cooldown",
+                    help="Resting period before an account can be selected again by the rotation engine to avoid spam triggers.",
                 )
                 ui_vpn_cd = st.number_input(
-                    "Network Settle Cooldown (seconds)",
+                    "Network Settle Timeout (seconds)",
                     min_value=3,
                     max_value=60,
                     value=int(st.session_state.vpn_cooldown_seconds),
                     step=1,
                     key="cfg_vpn_cd",
-                    help="Seconds to pause after VPN switch to allow network routes and DNS to settle.",
+                    help="Maximum seconds to poll for dynamic IP change after triggering VPN switch.",
                 )
+
+            ui_vpn_cmd = st.text_input(
+                "VPN Rotation Command (or script)",
+                value=st.session_state.vpn_rotate_command,
+                placeholder="e.g. python vpn_manager.py rotate",
+                key="cfg_vpn_cmd",
+                help="CLI command or script executed prior to launching each account. Leave blank to auto-detect installed CLIs (Windscribe, Proton, WARP) or rotate_vpn.bat.",
+            )
 
             t_col1, t_col2 = st.columns([1, 2])
             with t_col1:
-                if st.button("Test VPN Rotation Now", key="btn_test_vpn"):
-                    with st.spinner("Executing VPN rotation test..."):
+                if st.button("Test VPN Rotation Now", key="btn_test_vpn", width='stretch'):
+                    with st.spinner("Executing dynamic VPN rotation test..."):
                         res = rotate_vpn(command=ui_vpn_cmd, cooldown_seconds=int(ui_vpn_cd))
                         if res.get("changed"):
                             st.success(f"IP changed: {res.get('old_ip')} -> {res.get('new_ip')}")
@@ -638,6 +665,40 @@ with tab_bot:
                     st.caption("Detected CLI tools: " + ", ".join(f"`{k}`" for k in detected_vpns.keys()))
                 else:
                     st.caption("Custom script template available in `rotate_vpn.bat`.")
+
+            # Account Telemetry and Health Table
+            all_accounts_to_show = [u.strip() for u, _ in parsed_accts]
+            if ui_user.strip() and ui_user.strip() not in all_accounts_to_show:
+                all_accounts_to_show.insert(0, ui_user.strip())
+
+            if all_accounts_to_show:
+                st.markdown("---")
+                st.markdown("**Account Registry & Health Telemetry**")
+                table_rows = []
+                for acct in all_accounts_to_show:
+                    rec = get_account_record(acct)
+                    is_cool, rem = is_account_cooling(acct, cooldown_minutes=int(ui_acct_cooldown))
+                    p_c, a_c = get_cookies_file(acct)
+                    cookie_state = "Active" if (p_c.exists() or a_c.exists()) else "None"
+
+                    if is_cool:
+                        status_text = f"Cooling ({rem // 60}m {rem % 60}s)"
+                    else:
+                        status_text = rec.get("status", "ready").capitalize()
+
+                    prof_dir = ROOT / "profiles" / acct.lower()
+                    prof_state = "Isolated" if prof_dir.exists() else "Ready on Launch"
+
+                    table_rows.append({
+                        "Account": f"@{acct}",
+                        "Cookies": cookie_state,
+                        "Profile": prof_state,
+                        "Status": status_text,
+                        "Last IP": rec.get("last_ip", "UNKNOWN"),
+                        "Location": rec.get("last_location", "") or "—",
+                        "Posted": rec.get("total_comments_posted", 0),
+                    })
+                st.dataframe(table_rows, use_container_width=True, hide_index=True)
 
         st.markdown("---")
 
@@ -783,6 +844,7 @@ with tab_bot:
         st.session_state.vpn_rotate_command = ui_vpn_cmd.strip()
         st.session_state.vpn_cooldown_seconds = int(ui_vpn_cd)
         st.session_state.comments_per_account = int(ui_cpa)
+        st.session_state.account_cooldown_minutes = int(ui_acct_cooldown)
 
         _save_credentials(st.session_state.ig_username, st.session_state.ig_password)
 
@@ -810,6 +872,7 @@ with tab_bot:
             "vpn_rotate_command": st.session_state.vpn_rotate_command,
             "vpn_cooldown_seconds": st.session_state.vpn_cooldown_seconds,
             "comments_per_account": st.session_state.comments_per_account,
+            "account_cooldown_minutes": st.session_state.account_cooldown_minutes,
             "neg_hashtags": st.session_state.neg_hashtags,
             "pos_hashtags": st.session_state.pos_hashtags,
             "keywords": st.session_state.keywords,

@@ -14,6 +14,8 @@ bot_config.json
 app_backup.py
 *.log
 *.png
+profiles/
+account_registry.json
 __pycache__/
 .venv/
 

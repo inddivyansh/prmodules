@@ -175,34 +175,59 @@ def pause(seconds: float) -> None:
     time.sleep(seconds)
 
 
-def create_driver(headless: bool = False) -> webdriver.Chrome:
-    """Start Chrome configured to look like a normal user browser."""
-    options = Options()
-    if headless:
-        options.add_argument("--headless=new")
-    else:
-        options.add_argument("--start-maximized")
-    options.add_argument("--window-size=1920,1080")
+def create_driver(headless: bool = False, username: str | None = None) -> webdriver.Chrome:
+    """Start Chrome configured to look like a normal user browser with isolated profile support."""
+    def _build_options(use_profile: bool = True) -> Options:
+        opts = Options()
+        if headless:
+            opts.add_argument("--headless=new")
+        else:
+            opts.add_argument("--start-maximized")
+        opts.add_argument("--window-size=1920,1080")
 
-    # Suppress automation markers
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
+        # Suppress automation markers
+        opts.add_argument("--disable-blink-features=AutomationControlled")
+        opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+        opts.add_experimental_option("useAutomationExtension", False)
 
-    # Look like a real browser
-    options.add_argument(
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/131.0.0.0 Safari/537.36"
-    )
-    options.add_argument("--disable-infobars")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--lang=en-US,en")
+        # Look like a real browser
+        opts.add_argument(
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        )
+        opts.add_argument("--disable-infobars")
+        opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--lang=en-US,en")
 
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=options,
-    )
+        if use_profile and username:
+            clean_user = re.sub(r"[^a-zA-Z0-9_.-]", "", username.strip().lower())
+            if clean_user:
+                p_dir = ROOT / "profiles" / clean_user
+                p_dir.mkdir(parents=True, exist_ok=True)
+                lock = p_dir / "lockfile"
+                if lock.exists():
+                    try:
+                        lock.unlink()
+                    except Exception:
+                        pass
+                opts.add_argument(f"--user-data-dir={p_dir.resolve()}")
+        return opts
+
+    try:
+        driver = webdriver.Chrome(
+            service=Service(ChromeDriverManager().install()),
+            options=_build_options(use_profile=True),
+        )
+    except Exception as exc:
+        if username:
+            logging.warning("Dedicated profile start failed (%s); launching with temporary profile fallback", exc)
+            driver = webdriver.Chrome(
+                service=Service(ChromeDriverManager().install()),
+                options=_build_options(use_profile=False),
+            )
+        else:
+            raise exc
 
     if not headless:
         try:

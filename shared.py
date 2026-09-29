@@ -145,6 +145,8 @@ def create_driver(headless: bool = False) -> webdriver.Chrome:
     options = Options()
     if headless:
         options.add_argument("--headless=new")
+    else:
+        options.add_argument("--start-maximized")
     options.add_argument("--window-size=1920,1080")
 
     # Suppress automation markers
@@ -166,6 +168,12 @@ def create_driver(headless: bool = False) -> webdriver.Chrome:
         service=Service(ChromeDriverManager().install()),
         options=options,
     )
+
+    if not headless:
+        try:
+            driver.maximize_window()
+        except Exception:
+            pass
 
     # Remove navigator.webdriver flag so JS fingerprinting sees a normal browser
     driver.execute_cdp_cmd(
@@ -258,7 +266,7 @@ def _load_cookies(driver: webdriver.Chrome) -> bool:
 
 
 def _detect_otp_challenge(driver: webdriver.Chrome) -> bool:
-    """Check if Instagram is showing an OTP / 2FA / verification screen."""
+    """Check if Instagram is showing an OTP / 2FA / verification / checkpoint screen."""
     otp_indicators = (
         "//input[@name='verificationCode']",
         "//input[@aria-label='Security Code']",
@@ -271,6 +279,10 @@ def _detect_otp_challenge(driver: webdriver.Chrome) -> bool:
         "//span[contains(text(), 'Enter the code')]",
         "//span[contains(text(), 'we sent')]",
         "//h2[contains(text(), 'suspicious')]",
+        "//h2[contains(text(), 'Help us confirm')]",
+        "//span[contains(text(), 'Confirm that this is you')]",
+        "//div[contains(text(), 'Confirm it’s you')]",
+        "//div[contains(text(), 'challenge')]",
     )
     for sel in otp_indicators:
         if driver.find_elements(By.XPATH, sel):
@@ -279,66 +291,48 @@ def _detect_otp_challenge(driver: webdriver.Chrome) -> bool:
 
 
 def _wait_for_otp(driver: webdriver.Chrome, timeout: int = 180) -> bool:
-    """Show OTP prompt in terminal and wait for user to enter code in browser."""
-    print()
-    print("=" * 60)
-    print("🔐 TWO-FACTOR AUTHENTICATION / OTP REQUIRED")
-    print("=" * 60)
-    print("Instagram is asking for a verification code.")
-    print("Please check your phone/email for the OTP code.")
-    print()
-    print("Enter the code in the browser window.")
-    print(f"The bot will wait for {timeout} seconds...")
-    print("=" * 60)
-
+    """Show OTP prompt and wait for user to enter code in the open Chrome browser."""
+    logging.info("HUMAN VERIFICATION / OTP REQUIRED: Instagram is asking for verification. Please complete it in the Chrome browser window (waiting up to %ds)...", timeout)
     waited = 0
     interval = 5
     while waited < timeout:
         remaining = timeout - waited
-        print(f"⏳ Waiting {remaining}s for OTP entry...", flush=True)
+        if waited % 15 == 0:
+            logging.info("Waiting for human verification / code entry in Chrome window (%ds remaining)...", remaining)
         pause(interval)
         waited += interval
 
-        # Check if OTP was entered and we're now logged in
         if _is_logged_in(driver):
-            print("✅ OTP verified! Login successful.")
+            logging.info("Human verification confirmed! Login successful.")
             return True
 
-        # Check if we're past the OTP screen
         if not _detect_otp_challenge(driver):
             pause(3)
             if _is_logged_in(driver):
-                print("✅ OTP verified! Login successful.")
+                logging.info("Human verification confirmed! Login successful.")
                 return True
 
-    print("❌ OTP timeout — code was not entered in time.")
+    logging.warning("Verification timeout — code or challenge was not completed within %ds.", timeout)
     return False
 
 
-def _wait_for_manual_login(driver: webdriver.Chrome, timeout: int = 120) -> bool:
-    """Fallback: ask user to log in manually in the open browser window."""
-    print()
-    print("=" * 60)
-    print("👤 MANUAL LOGIN REQUIRED")
-    print("=" * 60)
-    print("Automatic login could not complete.")
-    print("Please log in manually in the Chrome browser window.")
-    print(f"The bot will wait for {timeout} seconds...")
-    print("=" * 60)
-
+def _wait_for_manual_login(driver: webdriver.Chrome, timeout: int = 180) -> bool:
+    """Fallback: ask user to complete login / verification manually in the open Chrome window."""
+    logging.info("MANUAL VERIFICATION REQUIRED: Please complete login/checkpoint in the open Chrome browser window (waiting up to %ds)...", timeout)
     waited = 0
     interval = 5
     while waited < timeout:
         remaining = timeout - waited
-        print(f"⏳ Waiting {remaining}s for manual login...", flush=True)
+        if waited % 15 == 0:
+            logging.info("Waiting for manual verification in Chrome browser (%ds remaining)...", remaining)
         pause(interval)
         waited += interval
 
         if _is_logged_in(driver):
-            print("✅ Manual login detected! Continuing.")
+            logging.info("Manual login confirmed in Chrome browser! Session established.")
             return True
 
-    print("❌ Manual login timeout.")
+    logging.warning("Manual login timeout — session was not completed within %ds.", timeout)
     return False
 
 

@@ -394,7 +394,14 @@ def main() -> int:
 
     driver = None
     try:
-        driver = create_driver(headless)
+        # Never hide browser during login if session cookies are absent,
+        # or if headless is set to False, so the user can complete human verification / 2FA.
+        is_headless = headless and COOKIES_FILE.exists()
+        if not is_headless:
+            logging.info("Opening visible automated Chrome browser for Instagram session (human verification ready)...")
+        else:
+            logging.info("Starting Chrome in headless mode (session cookies present)...")
+        driver = create_driver(is_headless)
         if not login_instagram(driver, username, password):
             return 1
         total = run_bot(

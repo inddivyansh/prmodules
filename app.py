@@ -167,6 +167,8 @@ section[data-testid="stSidebar"] {
     font-size: 0.78rem;
     line-height: 1.5;
     color: #cbd5e1;
+    display: flex;
+    flex-direction: column-reverse;
 }
 .log-line-default { color: #94a3b8; }
 .log-line-info { color: #38bdf8; }
@@ -613,7 +615,12 @@ with tab_bot:
 
         f_col1, f_col2, f_col3, f_col4 = st.columns(4)
         with f_col1:
-            ui_headless = st.checkbox("Headless Browser", value=st.session_state.headless, key="cfg_headless")
+            ui_headless = st.checkbox(
+                "Headless Browser (Hidden)",
+                value=st.session_state.headless,
+                key="cfg_headless",
+                help="Leave unchecked to show the Chrome browser on your desktop so you can complete Instagram human verification / CAPTCHA / 2FA.",
+            )
         with f_col2:
             ui_trending = st.checkbox("Enable Trending News", value=st.session_state.enable_trending, key="cfg_trending")
         with f_col3:
@@ -703,103 +710,115 @@ with tab_bot:
             st.rerun()
 
     # -----------------------------------------------------------------------
-    # LIVE ACTIVITY FEED (DIRECTLY BELOW BUTTONS)
+    # LIVE ACTIVITY FEED & TELEMETRY (AUTO-UPDATING FRAGMENT EVERY 2 SECONDS)
     # -----------------------------------------------------------------------
-    st.markdown("---")
-    st.markdown("#### Live Activity Feed")
+    @st.fragment(run_every=2)
+    def _render_live_activity_and_telemetry() -> None:
+        st.markdown("---")
+        f_h1, f_h2 = st.columns([3, 1])
+        with f_h1:
+            st.markdown("#### Live Activity Feed")
+        with f_h2:
+            alive = _bot_alive()
+            if alive:
+                st.markdown('<span class="status-pill-running">LIVE STREAMING &bull; 2S</span>', unsafe_allow_html=True)
+            else:
+                st.markdown('<span class="status-pill-idle">SYSTEM STANDBY</span>', unsafe_allow_html=True)
 
-    active = _bot_alive()
-    if active:
-        st.markdown(f'<span class="status-pill-running">SESSION ACTIVE &bull; PID {st.session_state.bot_process.pid}</span>', unsafe_allow_html=True)
-    else:
-        st.markdown('<span class="status-pill-idle">SYSTEM STANDBY</span>', unsafe_allow_html=True)
-
-    log_lines = _tail_log(80)
-    if log_lines:
-        feed_html = "".join(_log_html(l) for l in log_lines)
-    else:
-        feed_html = '<div class="log-line-default">No activity recorded yet. Launch a session to begin streaming output.</div>'
-
-    st.markdown(f'<div class="log-feed">{feed_html}</div>', unsafe_allow_html=True)
-
-    feed_ctrl1, feed_ctrl2 = st.columns([4, 1])
-    with feed_ctrl1:
+        active = _bot_alive()
         if active:
-            st.caption("Active monitoring cycle running in background. Click Refresh above to update feed.")
-    with feed_ctrl2:
-        if (ROOT / "monitor.log").exists():
-            if st.button("Clear Log", use_container_width=True):
-                try:
-                    (ROOT / "monitor.log").write_text("", encoding="utf-8")
-                    st.success("Log cleared.")
-                    st.rerun()
-                except Exception as ex:
-                    st.error(str(ex))
+            st.markdown(f'<span class="status-pill-running">SESSION ACTIVE &bull; PID {st.session_state.bot_process.pid}</span>', unsafe_allow_html=True)
+        else:
+            st.markdown('<span class="status-pill-idle">SYSTEM STANDBY</span>', unsafe_allow_html=True)
 
-    # -----------------------------------------------------------------------
-    # STATS AND RECENT ACTIVITY (DIRECTLY BELOW FEED, IN SAME TAB)
-    # -----------------------------------------------------------------------
-    st.markdown("---")
-    st.markdown("#### Performance Telemetry & Activity Records")
-    st.caption("Real-time metrics and response logs generated from active monitoring.")
+        log_lines = _tail_log(80)
+        if log_lines:
+            feed_html = "".join(_log_html(l) for l in reversed(log_lines))
+        else:
+            feed_html = '<div class="log-line-default">No activity recorded yet. Launch a session to begin streaming output.</div>'
 
-    current_stats = _stats()
-    sc = st.columns(6)
-    sc[0].metric("Comments Posted", current_stats["posted"])
-    sc[1].metric("Posts Flagged", current_stats["flagged"])
-    sc[2].metric("Posts Skipped", current_stats["skipped"])
-    sc[3].metric("Filtered (Not Neg)", current_stats["not_neg"])
-    sc[4].metric("Aged Out", current_stats["too_old"])
-    sc[5].metric("Total Scanned", current_stats["total_seen"])
+        st.markdown(f'<div class="log-feed">{feed_html}</div>', unsafe_allow_html=True)
 
-    # Recent Comments Section
-    st.markdown("##### Recent Published Comments")
-    posted_records = []
-    if RESPONSE_LOG_CSV.exists():
-        try:
-            with open(RESPONSE_LOG_CSV, newline="", encoding="utf-8") as f:
-                all_records = list(csv.DictReader(f))
-                posted_records = [r for r in all_records if r.get("status") == "posted"]
-        except Exception:
-            posted_records = []
+        feed_ctrl1, feed_ctrl2 = st.columns([4, 1])
+        with feed_ctrl1:
+            if active:
+                st.caption("Active monitoring cycle running in background. Live output streams automatically every 2 seconds.")
+            else:
+                st.caption("Engine standby. Live streaming updates automatically once a session is launched.")
+        with feed_ctrl2:
+            if (ROOT / "monitor.log").exists():
+                if st.button("Clear Log", use_container_width=True, key="btn_frag_clear_log"):
+                    try:
+                        (ROOT / "monitor.log").write_text("", encoding="utf-8")
+                        st.success("Log cleared.")
+                        st.rerun(scope="fragment")
+                    except Exception as ex:
+                        st.error(str(ex))
 
-    if posted_records:
-        for r in reversed(posted_records[-6:]):
-            with st.container(border=True):
-                rc1, rc2 = st.columns([5, 1])
-                with rc1:
-                    ts = r.get("responded_at", "")[:19].replace("T", " ")
-                    permalink = r.get("permalink", "")
-                    media_id = r.get("media_id", "Post")
-                    if permalink:
-                        st.markdown(f"**Target:** [{media_id}]({permalink}) &bull; *Timestamp: {ts} UTC*")
-                    else:
-                        st.markdown(f"**Target:** {media_id} &bull; *Timestamp: {ts} UTC*")
+        # Performance Telemetry & Activity Records
+        st.markdown("---")
+        st.markdown("#### Performance Telemetry & Activity Records")
+        st.caption("Real-time metrics and response logs generated from active monitoring (auto-updating live).")
 
-                    caption_snip = r.get("caption_snippet", "").strip()
-                    if caption_snip:
-                        st.caption(f"Original post excerpt: \"{caption_snip}\"")
+        current_stats = _stats()
+        sc = st.columns(6)
+        sc[0].metric("Comments Posted", current_stats["posted"])
+        sc[1].metric("Posts Flagged", current_stats["flagged"])
+        sc[2].metric("Posts Skipped", current_stats["skipped"])
+        sc[3].metric("Filtered (Not Neg)", current_stats["not_neg"])
+        sc[4].metric("Aged Out", current_stats["too_old"])
+        sc[5].metric("Total Scanned", current_stats["total_seen"])
 
-                    response_text = r.get("generated_response", "").strip()
-                    st.write(f"**Deployed Counter-Response:** {response_text}")
-
-                with rc2:
-                    st.markdown('<span class="status-pill-running">POSTED</span>', unsafe_allow_html=True)
-    else:
-        st.info("No counter-comments published yet. Published comments will appear here automatically.")
-
-    # Flagged Posts Data Table
-    if NEGATIVE_POSTS_CSV.exists():
-        with st.expander("View Full Negative Posts Register", expanded=False):
+        # Recent Comments Section
+        st.markdown("##### Recent Published Comments")
+        posted_records = []
+        if RESPONSE_LOG_CSV.exists():
             try:
-                with open(NEGATIVE_POSTS_CSV, newline="", encoding="utf-8") as f:
-                    neg_rows = list(csv.DictReader(f))
-                if neg_rows:
-                    st.dataframe(neg_rows, use_container_width=True)
-                else:
-                    st.write("No flagged posts registered.")
-            except Exception as e:
-                st.error(f"Error reading register: {e}")
+                with open(RESPONSE_LOG_CSV, newline="", encoding="utf-8") as f:
+                    all_records = list(csv.DictReader(f))
+                    posted_records = [r for r in all_records if r.get("status") == "posted"]
+            except Exception:
+                posted_records = []
+
+        if posted_records:
+            for r in reversed(posted_records[-6:]):
+                with st.container(border=True):
+                    rc1, rc2 = st.columns([5, 1])
+                    with rc1:
+                        ts = r.get("responded_at", "")[:19].replace("T", " ")
+                        permalink = r.get("permalink", "")
+                        media_id = r.get("media_id", "Post")
+                        if permalink:
+                            st.markdown(f"**Target:** [{media_id}]({permalink}) &bull; *Timestamp: {ts} UTC*")
+                        else:
+                            st.markdown(f"**Target:** {media_id} &bull; *Timestamp: {ts} UTC*")
+
+                        caption_snip = r.get("caption_snippet", "").strip()
+                        if caption_snip:
+                            st.caption(f'Original post excerpt: "{caption_snip}"')
+
+                        response_text = r.get("generated_response", "").strip()
+                        st.write(f"**Deployed Counter-Response:** {response_text}")
+
+                    with rc2:
+                        st.markdown('<span class="status-pill-running">POSTED</span>', unsafe_allow_html=True)
+        else:
+            st.info("No counter-comments published yet. Published comments will appear here automatically.")
+
+        # Flagged Posts Data Table
+        if NEGATIVE_POSTS_CSV.exists():
+            with st.expander("View Full Negative Posts Register", expanded=False):
+                try:
+                    with open(NEGATIVE_POSTS_CSV, newline="", encoding="utf-8") as f:
+                        neg_rows = list(csv.DictReader(f))
+                    if neg_rows:
+                        st.dataframe(neg_rows, use_container_width=True)
+                    else:
+                        st.write("No flagged posts registered.")
+                except Exception as e:
+                    st.error(f"Error reading register: {e}")
+
+    _render_live_activity_and_telemetry()
 
 
 # ===========================================================================

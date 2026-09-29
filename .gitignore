@@ -1,6 +1,10 @@
 .env
+accounts.txt
 .instagram_session.json
 .instagram_cookies.json
+cookies.json
+.cookies_*.json
+cookies_*.json
 seen_posts.json
 review_queue.csv
 audit_log.csv
@@ -12,3 +16,4 @@ app_backup.py
 *.png
 __pycache__/
 .venv/
+

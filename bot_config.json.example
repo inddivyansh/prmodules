@@ -1,0 +1,21 @@
+{
+  "model": "llama3.2",
+  "strategy": "trending_first",
+  "max_per_source": 20,
+  "max_comments": 12,
+  "delay_seconds": 120,
+  "max_comment_length": 220,
+  "max_age_days": 14,
+  "headless": false,
+  "comment_prefix": "",
+  "enable_trending": true,
+  "shuffle_sources": true,
+  "enable_vpn_rotation": false,
+  "vpn_rotate_command": "",
+  "vpn_cooldown_seconds": 8,
+  "comments_per_account": 3,
+  "neg_hashtags": "kashmirviolence,indianarmycrimes,armyatrocities,humanrightsviolation",
+  "pos_hashtags": "indianarmy,indianarmedforces,adgpi,jaihind",
+  "keywords": "indian army viral,kashmir encounter,agniveer protest,indian army fake",
+  "dry_run": false
+}

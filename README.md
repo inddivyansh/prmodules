@@ -1,201 +1,232 @@
-# Indian Army PR Bot 🇮🇳
+# Indian Army PR Command Center 🇮🇳
 
-An automated, intelligent Instagram monitoring and public relations tool. It monitors hashtags and search keywords for negative or misleading posts concerning the Indian Army, evaluates content sentiment using a local Ollama LLM, generates respectful and patriotic counter-responses in the language of the post, and automatically comments in real-time.
-
----
-
-## Key Features
-
-- **Single-Pass Real-Time Workflow (`bot.py`)**:
-  Scans, detects negative sentiment, generates a contextual counter-response, and posts a comment immediately on the spot before moving to the next post.
-- **Ultra-Strict Sentiment Analysis**:
-  Evaluates post captions using a local LLM (Ollama). Even a slight degree of negativity (or presence of anti-army hashtags such as `#indianarmycrimes`, `#armyatrocities`) triggers counter-engagement.
-- **Language-Adaptive Counter-Responses**:
-  Dynamically replies in the language and dialect of the source post (Hindi, Urdu, English, Hinglish, etc.) while upholding a dignified, professional, and patriotic tone.
-- **3-Step Human-Like Login System**:
-  1. **Session Cookie Restore**: Loads `.instagram_cookies.json` to bypass login entirely if a valid session exists.
-  2. **Humanized Typing**: Types username and password character-by-character with randomized human keystroke intervals (0.05s–0.18s).
-  3. **2FA / OTP Challenge Terminal Wait**: Detects two-factor/SMS/email authentication challenges, pauses execution, displays a countdown in your terminal, and lets you enter the code directly in the browser.
-  4. **Interactive Fallback**: Allows manual login in the browser window if Instagram serves unexpected security challenges.
-- **Robust Anti-Detection Engine**:
-  Configured to look like a standard user browser—disables `navigator.webdriver` via CDP, removes automation flags (`--disable-blink-features=AutomationControlled`), uses standard desktop Chrome headers, and automatically dismisses cookie banners and "Save Info" dialogs.
-- **Resilient React Comment Submission**:
-  Engineered specifically for Instagram's dynamic React DOM:
-  - Avoids redundant page reloads if already viewing the post.
-  - Dynamically re-queries elements to eliminate `StaleElementReferenceException`.
-  - Submits comments via keyboard `Enter` (`Keys.RETURN`) and multi-selector "Post" button clicks (`div[@role='button']`, `form//div`, `button[@type='submit']`) with JavaScript fallback.
-  - Verifies comment appearance and detects Instagram restriction banners.
-- **Full Audit Trail**:
-  Maintains detailed logs in `negative_posts.csv`, `response_log.csv`, and `monitor.log`. Allows retrying failed attempts without duplicate entries.
+An automated, intelligent Instagram sentiment monitoring and public relations operations platform. The system monitors Instagram hashtags, search keywords, and live military news for negative or adversarial narratives concerning the Indian Armed Forces. It evaluates post content and sentiment using a local Ollama LLM, drafts factual, dignified, and patriotic counter-responses in the language of the source post, and publishes responses with automated multi-account and VPN rotation capabilities.
 
 ---
 
-## Workflow Overview
+## Key Capabilities
 
-```
-[Start bot.py]
-      │
-      ▼
-[3-Step Login: Cookies ➔ Human Typing ➔ OTP Wait ➔ Manual Fallback]
-      │
-      ▼
-[Scan Source Feeds (Negative Hashtags, Keywords, Official Feeds)]
-      │
-      ▼
-[Extract Post Caption & Check Duplicate History]
-      │
-      ▼
-[Ollama Sentiment Check: Is post negative toward Indian Army?]
-      │
-      ├── (NO) ──► Skip & proceed to next post
-      │
-      └── (YES) ──► Generate Contextual Counter-Response
-                          │
-                          ▼
-                    [Post Comment via Resilient Selenium Engine]
-                          │
-                          ▼
-                    [Log Status to negative_posts.csv & response_log.csv]
-                          │
-                          ▼
-                    [Paced Human Delay (e.g. 90s) before next action]
+- **Command Center Dashboard (`app.py`)**:
+  - Unified **Bot Operations** interface integrating configuration, launch controls, live telemetry, and recent comment tracking in a single view.
+  - **Live Auto-Streaming Activity Feed**: Automatically streams execution logs in real-time every 2 seconds without full-page reloads.
+  - **One-Click Engine Controls**: Launch, save configuration, pause, or terminate sessions directly from the web interface.
+  - **Ollama Engine Management**: Built-in health check and automatic service starter for local LLM inference.
+
+- **Multi-Account Rotation & Account Budgeting**:
+  - Rotate across multiple Instagram accounts defined in `accounts.txt`.
+  - **Isolated Cookie Sessions**: Each account maintains its own isolated cookie store (`.cookies_<username>.json`), preventing session collisions or cross-account logout.
+  - **Per-Account Comment Budget**: Configurable comments per account (`comments_per_account`) to naturally distribute interaction volume.
+
+- **Automated VPN / IP Rotation (`vpn_manager.py`)**:
+  - Automatically switches network IP addresses before launching each account session to prevent IP-level rate-limiting.
+  - Native integration with free Windows CLI VPN tools:
+    - **Windscribe CLI**: `windscribe connect best`
+    - **Proton VPN CLI**: `protonvpn-cli c -f`
+    - **Cloudflare WARP**: `warp-cli disconnect && warp-cli connect`
+    - **Custom Script**: Hook into [`rotate_vpn.bat`](rotate_vpn.bat) with any custom VPN command or proxy client.
+  - Automatic public IP verification and DNS flushing before initiating browser sessions.
+
+- **Ultra-Reliable 3-Step Login & Cookie Persistence**:
+  1. **Session Cookie Restore**: Fast-boots existing sessions from `.instagram_cookies.json` or `cookies.json`.
+  2. **Humanized Typing**: Types credentials with randomized human keystroke intervals (0.05s–0.18s).
+  3. **Verification & OTP Handler**: Pauses and allows interactive entry for two-factor (2FA), SMS/email codes, and security challenges.
+  4. **Guaranteed Cookie Persistence**: Automatically serializes and saves fresh session cookies on **every** successful login path (automated typing, OTP verification, or manual browser login).
+
+- **Strict LLM Sentiment Detection**:
+  - Evaluates captions against Indian Army guidelines. Adversarial narratives and anti-army hashtags (`#indianarmycrimes`, `#armyatrocities`, `#kashmirviolence`) trigger counter-engagement.
+  - **Language-Adaptive**: Replies dynamically in the language and dialect of the source post (Hindi, English, Hinglish, Urdu).
+
+- **Dynamic Source Targeting**:
+  - **Live Defense News RSS**: Aggregates breaking defense news via Google News RSS and automatically converts trending topics into Instagram search queries.
+  - **Keyword & Hashtag Scanners**: Explores top posts and recent hashtag feeds.
+  - **Recency Filter**: Skips posts older than a configurable threshold (`max_age_days`) to focus engagement strictly on active discussions.
+
+---
+
+## Architecture & Workflow
+
+```mermaid
+flowchart TD
+    A[Launch Bot Session] --> B{Multi-Account Active?}
+    B -->|Yes - accounts.txt| C[Select Account i: @username]
+    B -->|No - Single Account| D[Load Single Account from .env]
+    
+    C --> E{VPN Rotation Enabled?}
+    E -->|Yes| F[Execute vpn_manager.py / rotate_vpn.bat]
+    F --> G[Verify New Public IP & Flush DNS]
+    G --> H[Load Isolated Session: .cookies_username.json]
+    E -->|No| H
+    D --> H
+    
+    H --> I[Open Chrome & Verify Authentication]
+    I --> J[Scan Sources: RSS News + Keywords + Hashtags]
+    J --> K[Filter Recency & Deduplication]
+    K --> L[Ollama LLM Sentiment Analysis]
+    
+    L -->|Not Negative| M[Log Seen & Continue]
+    L -->|Negative| N[Generate Contextual Counter-Response]
+    N --> O[Post Comment via React-Aware DOM Engine]
+    O --> P[Persist Updated Cookies & Log Audit Record]
+    
+    P --> Q{Session Budget Reached?}
+    Q -->|No| J
+    Q -->|Account Budget Met| R[Save Cookies & Close Chrome]
+    R --> S{More Accounts in Queue?}
+    S -->|Yes| C
+    S -->|No| T[Session Complete]
 ```
 
 ---
 
 ## Prerequisites
 
-1. **Python 3.10+**: Ensure Python is installed and added to your `PATH`.
-2. **Google Chrome**: Modern desktop Google Chrome installed.
-3. **Ollama**: Running locally with your chosen model.
+1. **Python 3.10+**: Installed and available in your system `PATH`.
+2. **Google Chrome**: Standard desktop Google Chrome installed.
+3. **Ollama**: Installed and running locally.
    ```powershell
-   # Install model (run once)
+   # Pull default recommended model
    ollama pull llama3.2
    ```
+4. **(Optional) Free VPN CLI**: If using automated VPN rotation:
+   - [Windscribe](https://windscribe.com/) (`windscribe-cli`)
+   - [Proton VPN](https://protonvpn.com/) (`protonvpn-cli`)
+   - [Cloudflare WARP](https://1.1.1.1/) (`warp-cli`)
 
 ---
 
-## Quick Start
+## Installation & Setup
 
-### 1. Setup Virtual Environment & Install Dependencies
+### 1. Clone & Set Up Environment
 
 ```powershell
-# Create virtual environment (if not already created)
+# Clone the repository
+git clone https://github.com/inddivyansh/prmodules.git
+cd prmodules
+
+# Create virtual environment
 python -m venv .venv
 
 # Activate virtual environment
 .\.venv\Scripts\Activate.ps1
 
-# Install required packages
+# Install required dependencies
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment
+### 2. Configure Credentials
 
-Copy the template and edit `.env`:
-
+#### Option A: Single Account Setup (`.env`)
+Copy `.env.example` to `.env` and fill in your account details:
 ```powershell
 Copy-Item .env.example .env
-notepad .env
 ```
-
-Fill in your Instagram credentials and customize settings:
-
+Edit `.env`:
 ```env
-# Instagram Credentials
-INSTAGRAM_USERNAME=your_username
-INSTAGRAM_PASSWORD=your_password
-
-# Hashtags to monitor (comma-separated, without #)
-POSITIVE_HASHTAGS=indianarmy,indianarmedforces,southerncommand,adgpi,jaihind
-NEGATIVE_HASHTAGS=indianarmycrimes,armyatrocities,kashmirviolence,humanrightsviolation
-
-# Search keywords to monitor (comma-separated)
-SEARCH_KEYWORDS=indian army fake,army brutality,military torture,false encounter
-
-# Local Ollama model
-OLLAMA_MODEL=llama3.2
-
-# Bot Parameters
-MAX_POSTS_TO_SCAN_PER_SOURCE=20
-MAX_COMMENTS_PER_SESSION=6
-DELAY_BETWEEN_COMMENTS_SECONDS=90
-MAX_COMMENT_LENGTH=220
-COMMENT_PREFIX=
-DETECTION_STRATEGY=negative_first
-HEADLESS=false
+INSTAGRAM_USERNAME=your_instagram_handle
+INSTAGRAM_PASSWORD=your_instagram_password
 ```
 
-### 3. Ensure Ollama Is Running
-
-Make sure Ollama is active on your system:
+#### Option B: Multi-Account Rotation Setup (`accounts.txt`)
+Copy `accounts.txt.example` to `accounts.txt`:
 ```powershell
-ollama list
+Copy-Item accounts.txt.example accounts.txt
+```
+Edit `accounts.txt` with your rotation IDs (one per line):
+```text
+army_supporter_01:PasswordOne123!
+army_supporter_02:PasswordTwo456!
+army_supporter_03:PasswordThree789!
 ```
 
-### 4. Run the Bot
+---
+
+## Running the Application
+
+### Method 1: Web Command Center (Recommended)
+
+Launch the Streamlit Command Center dashboard:
+
+```powershell
+streamlit run app.py
+```
+*Or using the virtual environment directly:*
+```powershell
+.\.venv\Scripts\streamlit.exe run app.py
+```
+
+Open your browser to `http://localhost:8501`:
+1. Review or modify operational parameters in the **Bot Operations** tab.
+2. If using multiple accounts or VPN rotation, expand **Multi-Account Rotation & Automated VPN Switching**.
+3. Click **Launch Bot Session**.
+4. Watch live actions, sentiment verdicts, and comments stream in the **Live Activity Feed**.
+
+---
+
+### Method 2: Headless / Terminal Execution
+
+To run the engine directly from the command line:
 
 ```powershell
 python bot.py
 ```
-*Or using the virtual environment directly:*
+*Or using the virtual environment:*
 ```powershell
 .\.venv\Scripts\python.exe bot.py
 ```
 
 ---
 
-## Configuration Reference
+## Automated VPN & IP Rotation Guide
 
-| Environment Variable | Default | Description |
-|---|---|---|
-| `INSTAGRAM_USERNAME` | *(Required)* | Instagram login username / email. |
-| `INSTAGRAM_PASSWORD` | *(Required)* | Instagram login password. |
-| `NEGATIVE_HASHTAGS` | `indianarmycrimes,...` | Anti-army hashtags where all content is critically evaluated. |
-| `POSITIVE_HASHTAGS` | `indianarmy,...` | Official / general military hashtags monitored for trolls or hostile comments. |
-| `SEARCH_KEYWORDS` | `indian army viral,...` | Keywords searched in Instagram explore / search. |
-| `OLLAMA_MODEL` | `llama3.2` | Ollama model used for detection and response generation. |
-| `DETECTION_STRATEGY` | `trending_first` | `trending_first`: Live news RSS & active keywords first, then hashtags.<br>`negative_first`: Negative tags first, then keywords, then positive tags.<br>`balanced`: Shuffles all sources randomly.<br>`positive_only`: Only scans positive tags for brigading. |
-| `MAX_POST_AGE_DAYS` | `14` | Recency filter: skips posts older than this threshold to target only active/trending posts. |
-| `ENABLE_TRENDING_NEWS` | `true` | Automatically fetches breaking military & defence headlines via Google News RSS to generate real-time search queries. |
-| `SHUFFLE_SOURCES` | `true` | Shuffles queries every session so the bot discovers fresh content instead of repeating the same source. |
-| `MAX_POSTS_TO_SCAN_PER_SOURCE` | `20` | Maximum posts collected per hashtag/keyword. |
-| `MAX_COMMENTS_PER_SESSION` | `6` | Safety cap on total comments posted during a single run. |
-| `DELAY_BETWEEN_COMMENTS_SECONDS` | `90` | Base wait time between successive comments (randomized ±30%). |
-| `MAX_COMMENT_LENGTH` | `220` | Maximum character limit for generated responses. |
-| `COMMENT_PREFIX` | *(Empty)* | Optional text prefixed to every comment (e.g., `[Official Response]`). |
-| `HEADLESS` | `false` | `false`: Shows Chrome window (recommended for monitoring / OTP).<br>`true`: Runs in background. |
+When operating multiple Instagram accounts, rotating IP addresses ensures accounts are not linked by IP address or rate-limited.
+
+### Testing VPN Rotation via CLI
+Test your current IP and rotation hook at any time:
+```powershell
+# Check current public IP and detected VPN tools
+python vpn_manager.py status
+
+# Test rotation execution
+python vpn_manager.py rotate
+```
+
+### Configuring Rotation Commands
+You can configure the rotation command via the Dashboard or `bot_config.json`:
+- **Windscribe**: `"C:\Program Files\Windscribe\windscribe-cli.exe" connect best`
+- **Proton VPN**: `protonvpn-cli c -f`
+- **Cloudflare WARP**: `warp-cli disconnect && warp-cli connect`
+- **Custom Script**: Edit [`rotate_vpn.bat`](rotate_vpn.bat) and use `rotate_vpn.bat`.
 
 ---
 
-## Output Files & Audit Logs
+## Operational Configuration Reference (`bot_config.json`)
+
+| Parameter | Default | Description |
+| :--- | :--- | :--- |
+| `model` | `llama3.2` | Ollama model utilized for sentiment classification and response generation. |
+| `strategy` | `trending_first` | `trending_first`: Live news queries first, then keywords and hashtags.<br>`negative_first`: Negative tags first, then keywords.<br>`balanced`: Shuffles all feeds evenly.<br>`positive_only`: Scans official feeds for troll brigading. |
+| `max_comments` | `12` | Total session comment ceiling across all accounts. |
+| `comments_per_account` | `3` | Maximum comments posted before rotating to the next account. |
+| `delay_seconds` | `120` | Base wait time between successive comments (randomized ±25%). |
+| `max_age_days` | `14` | Recency cutoff: skips posts published older than $N$ days. |
+| `headless` | `false` | `false`: Visible Chrome browser (required on first run / verification).<br>`true`: Background browser. |
+| `enable_trending` | `true` | Fetches live defense headlines via Google News RSS. |
+| `enable_vpn_rotation` | `false` | Automatically triggers VPN rotation command before switching accounts. |
+| `vpn_rotate_command` | `""` | CLI command executed to rotate VPN IP. |
+| `vpn_cooldown_seconds`| `8` | Wait duration after rotation to allow network adapters to settle. |
+
+---
+
+## Audit Logs & Output Files
 
 | File | Purpose |
-|---|---|
-| `seen_posts.json` | Persistent registry of all evaluated posts (`posted`, `not_negative`, `too_old`, `already_commented`) preventing duplicate comments across runs. |
-| `negative_posts.csv` | Record of all flagged posts: ID, username, permalink, caption snippet, sentiment, and response status (`posted`, `failed`, `skipped`). |
-| `response_log.csv` | Full audit log containing the exact generated response text, post link, timestamp, and status. |
-| `monitor.log` | Complete timestamped console and execution log for debugging. |
-| `.instagram_cookies.json` | Persisted session cookies used for subsequent automatic logins. |
-
----
-
-## Viewing Results in PowerShell
-
-Monitor logs in real-time:
-```powershell
-Get-Content monitor.log -Tail 25 -Wait
-```
-
-View all flagged posts:
-```powershell
-Import-Csv negative_posts.csv | Format-Table -Property media_id, username, source_tag, response_status
-```
-
-View posted comments:
-```powershell
-Import-Csv response_log.csv | Where-Object { $_.status -eq "posted" } | Format-Table -Property permalink, generated_response, responded_at
-```
+| :--- | :--- |
+| `negative_posts.csv` | Log of all flagged posts: ID, handle, permalink, caption snippet, sentiment, and response status. |
+| `response_log.csv` | Complete response audit trail: post link, generated counter-narrative text, timestamp, and status. |
+| `seen_posts.json` | Persistent deduplication index tracking processed posts across all runs. |
+| `monitor.log` | Consolidated, timestamped runtime execution log. |
+| `.cookies_<username>.json` | Per-account serialized session cookies for automatic session restoration. |
+| `rotate_vpn.bat` | Customizable Windows batch script for VPN command triggers. |
 
 ---
 
@@ -203,22 +234,26 @@ Import-Csv response_log.csv | Where-Object { $_.status -eq "posted" } | Format-T
 
 ```
 PR/
-├── bot.py                  # All-in-one execution script (scan, detect, reply, comment)
-├── shared.py               # Core automation library (Selenium driver, login, commenting, CSV I/O)
-├── .env                    # Active configuration & credentials (gitignored)
-├── .env.example            # Sample configuration template
+├── app.py                  # Streamlit Command Center UI & Live Telemetry Feed
+├── bot.py                  # Core autonomous engine (scrapes, classifies, comments, rotates)
+├── shared.py               # Shared automation framework (Selenium driver, multi-cookies, CSV I/O)
+├── vpn_manager.py          # IP verification & automated VPN rotation manager
+├── rotate_vpn.bat          # User-customizable VPN rotation batch script
+├── accounts.txt.example    # Multi-account credentials template
+├── bot_config.json.example # Operational settings template
+├── .env.example            # Environment variables template
 ├── requirements.txt        # Python package dependencies
-├── negative_posts.csv      # Log of flagged posts (auto-generated)
-├── response_log.csv        # Detailed comment audit history (auto-generated)
-├── monitor.log             # Runtime log file (auto-generated)
-└── .instagram_cookies.json # Saved session cookies (auto-generated)
+├── seen_posts.json         # Deduplication history (auto-generated)
+├── negative_posts.csv      # Flagged negative posts log (auto-generated)
+├── response_log.csv        # Counter-comment audit history (auto-generated)
+└── monitor.log             # Consolidated execution log (auto-generated)
 ```
 
 ---
 
 ## Safety & Best Practices
 
-1. **Dedicated Account**: Use a dedicated account created for public relations activities.
-2. **Moderate Volume**: Maintain a conservative session comment cap (`MAX_COMMENTS_PER_SESSION=4` to `6`) and realistic delays (`90` to `180` seconds) to avoid platform rate limits.
-3. **Session Re-use**: Do not delete `.instagram_cookies.json` unnecessarily; re-using valid cookies reduces login requests and prevents verification challenges.
-4. **First Run in Visible Mode**: Always run with `HEADLESS=false` initially so you can solve any 2FA or security prompts if presented by Instagram.
+1. **First-Time Login**: Keep `headless: false` during initial login or when adding new accounts so you can solve any Instagram security prompts or CAPTCHAs.
+2. **Session Cookies**: Never delete `.cookies_<username>.json` files; reusing valid session cookies minimizes login challenges.
+3. **Paced Activity**: Maintain conservative comment quotas (`comments_per_account: 2-3`, `delay_seconds: 90-180`) to ensure natural interaction pacing.
+4. **Credential Security**: Never commit `.env`, `accounts.txt`, or cookie files to public repositories (`.gitignore` is pre-configured to exclude them).

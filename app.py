@@ -22,6 +22,7 @@ from pipeline import analyze_instagram_url, analyze_post_content, publish_approv
 from reporter import generate_sitrep
 from verifier import load_knowledge_base
 from shared import (
+    ALT_COOKIES_FILE,
     COOKIES_FILE,
     NEGATIVE_POSTS_CSV,
     RESPONSE_LOG_CSV,
@@ -300,9 +301,15 @@ def _save_config_file(cfg: dict) -> None:
 
 def _cookie_status() -> tuple[bool, str]:
     """Check Instagram cookie file status."""
+    target_file = None
     if COOKIES_FILE.exists():
+        target_file = COOKIES_FILE
+    elif ALT_COOKIES_FILE.exists():
+        target_file = ALT_COOKIES_FILE
+
+    if target_file:
         try:
-            d = json.loads(COOKIES_FILE.read_text(encoding="utf-8"))
+            d = json.loads(target_file.read_text(encoding="utf-8"))
             if isinstance(d, list) and d:
                 return True, f"Active session cookies detected ({len(d)} cookies) — auto-login enabled"
         except Exception:

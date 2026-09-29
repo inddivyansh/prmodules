@@ -16,10 +16,13 @@ from urllib.parse import quote
 import ollama
 
 from shared import (
+    ALT_COOKIES_FILE,
     COOKIES_FILE,
     ROOT,
     NegativePost,
     ResponseRecord,
+    _is_logged_in,
+    _save_cookies,
     append_negative_post,
     append_response_log,
     bounded_int,
@@ -208,6 +211,12 @@ def run_bot(
     existing_ids = read_existing_media_ids()
     comments_posted = 0
 
+    # Ensure active session cookies are preserved before scraping begins
+    try:
+        _save_cookies(driver)
+    except Exception:
+        pass
+
     for label, url in sources:
         if comments_posted >= max_comments:
             logging.info("Reached session comment limit (%d)", max_comments)
@@ -317,6 +326,10 @@ def run_bot(
             if success:
                 comments_posted += 1
                 logging.info("  ✅ [posted] comment %d/%d on %s", comments_posted, max_comments, media_id)
+                try:
+                    _save_cookies(driver)
+                except Exception:
+                    pass
                 if comments_posted < max_comments:
                     delay = random.uniform(delay_seconds * 0.8, delay_seconds * 1.3)
                     logging.info("  waiting %.0fs before next action…", delay)
@@ -433,7 +446,8 @@ def main() -> int:
     try:
         # Never hide browser during login if session cookies are absent,
         # or if headless is set to False, so the user can complete human verification / 2FA.
-        is_headless = headless and COOKIES_FILE.exists()
+        cookies_exist = COOKIES_FILE.exists() or ALT_COOKIES_FILE.exists()
+        is_headless = headless and cookies_exist
         if not is_headless:
             logging.info("Opening visible automated Chrome browser for Instagram session (human verification ready)...")
         else:
@@ -441,6 +455,10 @@ def main() -> int:
         driver = create_driver(is_headless)
         if not login_instagram(driver, username, password):
             return 1
+        try:
+            _save_cookies(driver)
+        except Exception:
+            pass
         total = run_bot(
             driver,
             sources,
@@ -460,6 +478,11 @@ def main() -> int:
         return 1
     finally:
         if driver:
+            try:
+                if _is_logged_in(driver):
+                    _save_cookies(driver)
+            except Exception:
+                pass
             driver.quit()
 
 

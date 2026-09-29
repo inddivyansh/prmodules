@@ -8,26 +8,31 @@ An automated, intelligent Instagram sentiment monitoring and public relations op
 
 - **Command Center Dashboard (`app.py`)**:
   - Unified **Bot Operations** interface integrating configuration, launch controls, live telemetry, and recent comment tracking in a single view.
+  - **Real-Time Public Network Egress Badge**: Live indicator displaying active IP, Country, City, and ISP egress routing.
+  - **Interactive Account Registry & Health Table**: Inspect account handles, cookie status, isolated profile states, safety cooldown countdowns, last IP bindings, and lifetime comments posted.
   - **Live Auto-Streaming Activity Feed**: Automatically streams execution logs in real-time every 2 seconds without full-page reloads.
   - **One-Click Engine Controls**: Launch, save configuration, pause, or terminate sessions directly from the web interface.
   - **Ollama Engine Management**: Built-in health check and automatic service starter for local LLM inference.
 
-- **Multi-Account Rotation & Account Budgeting**:
+- **Multi-Account Rotation & Safety Architecture**:
   - Rotate across multiple Instagram accounts defined in `accounts.txt`.
-  - **Isolated Cookie Sessions**: Each account maintains its own isolated cookie store (`.cookies_<username>.json`), preventing session collisions or cross-account logout.
+  - **Dedicated Per-Account Browser Profiles (`profiles/<username>`)**: Isolated Chrome user-data directories preserve `localStorage`, `IndexedDB`, session tokens, and browser canvas fingerprints, preventing device-switching anomalies.
+  - **Isolated Cookie Vaults**: Each account maintains its own isolated cookie store (`.cookies_<username>.json`), preventing session collisions or cross-account logout.
+  - **Persistent Health & Cooldown Registry (`account_tracker.py`)**: Enforces configurable resting cooldowns (`account_cooldown_minutes: 15`) and logs IP bindings, session counts, and challenge states to `account_registry.json`.
   - **Per-Account Comment Budget**: Configurable comments per account (`comments_per_account`) to naturally distribute interaction volume.
 
-- **Automated VPN / IP Rotation (`vpn_manager.py`)**:
-  - Automatically switches network IP addresses before launching each account session to prevent IP-level rate-limiting.
+- **Dynamic VPN & IP Rotation Engine (`vpn_manager.py`)**:
+  - **Zero Blind Waits**: Dynamic polling (`poll_interval=1.8s`) verifies IP change the instant the VPN connection handshakes, eliminating rigid delays.
+  - **Rich Geolocation Resolution**: Resolves IP, City, Country, and ISP via `http://ip-api.com/json/` with multiple fault-tolerant fallbacks.
+  - **DNS Cache Flush**: Automatically clears Windows DNS cache (`ipconfig /flushdns`) post-rotation to eliminate stale socket connections.
   - Native integration with free Windows CLI VPN tools:
     - **Windscribe CLI**: `windscribe connect best`
     - **Proton VPN CLI**: `protonvpn-cli c -f`
     - **Cloudflare WARP**: `warp-cli disconnect && warp-cli connect`
     - **Custom Script**: Hook into [`rotate_vpn.bat`](rotate_vpn.bat) with any custom VPN command or proxy client.
-  - Automatic public IP verification and DNS flushing before initiating browser sessions.
 
 - **Ultra-Reliable 3-Step Login & Cookie Persistence**:
-  1. **Session Cookie Restore**: Fast-boots existing sessions from `.instagram_cookies.json` or `cookies.json`.
+  1. **Session Cookie Restore**: Fast-boots existing sessions from `.cookies_<username>.json` or `cookies.json`.
   2. **Humanized Typing**: Types credentials with randomized human keystroke intervals (0.05s–0.18s).
   3. **Verification & OTP Handler**: Pauses and allows interactive entry for two-factor (2FA), SMS/email codes, and security challenges.
   4. **Guaranteed Cookie Persistence**: Automatically serializes and saves fresh session cookies on **every** successful login path (automated typing, OTP verification, or manual browser login).
@@ -48,32 +53,38 @@ An automated, intelligent Instagram sentiment monitoring and public relations op
 ```mermaid
 flowchart TD
     A[Launch Bot Session] --> B{Multi-Account Active?}
-    B -->|Yes - accounts.txt| C[Select Account i: @username]
+    B -->|Yes - accounts.txt| C[Select Account: @username]
     B -->|No - Single Account| D[Load Single Account from .env]
     
-    C --> E{VPN Rotation Enabled?}
-    E -->|Yes| F[Execute vpn_manager.py / rotate_vpn.bat]
-    F --> G[Verify New Public IP & Flush DNS]
-    G --> H[Load Isolated Session: .cookies_username.json]
+    C --> C1{Account in Cooldown?}
+    C1 -->|Yes| C2[Skip to Next Account]
+    C2 --> C
+    C1 -->|No - Ready| E{VPN Rotation Enabled?}
+    
+    E -->|Yes| F[Execute Dynamic VPN Switch]
+    F --> G[Poll for IP Change, Geo-Lookup & Flush DNS]
+    G --> H[Bind IP & Start Session Telemetry]
     E -->|No| H
     D --> H
     
-    H --> I[Open Chrome & Verify Authentication]
-    I --> J[Scan Sources: RSS News + Keywords + Hashtags]
-    J --> K[Filter Recency & Deduplication]
-    K --> L[Ollama LLM Sentiment Analysis]
+    H --> I[Launch Dedicated Chrome Profile: profiles/username]
+    I --> J[Load Isolated Cookies: .cookies_username.json]
+    J --> K[Verify Authentication / OTP Prompt]
+    K --> L[Scan Sources: RSS News + Keywords + Hashtags]
+    L --> M[Filter Recency & Deduplication]
+    M --> N[Ollama LLM Sentiment Analysis]
     
-    L -->|Not Negative| M[Log Seen & Continue]
-    L -->|Negative| N[Generate Contextual Counter-Response]
-    N --> O[Post Comment via React-Aware DOM Engine]
-    O --> P[Persist Updated Cookies & Log Audit Record]
+    N -->|Not Negative| O[Log Seen & Continue]
+    N -->|Negative| P[Generate Contextual Counter-Response]
+    P --> Q[Post Comment via React-Aware DOM Engine]
+    Q --> R[Persist Updated Cookies & Log Audit Record]
     
-    P --> Q{Session Budget Reached?}
-    Q -->|No| J
-    Q -->|Account Budget Met| R[Save Cookies & Close Chrome]
-    R --> S{More Accounts in Queue?}
-    S -->|Yes| C
-    S -->|No| T[Session Complete]
+    R --> S{Session Budget Reached?}
+    S -->|No| L
+    S -->|Account Budget Met| T[Record Telemetry, Cooldown & Close Chrome]
+    T --> U{More Accounts in Queue?}
+    U -->|Yes| C
+    U -->|No| V[Session Complete]
 ```
 
 ---
@@ -207,13 +218,14 @@ You can configure the rotation command via the Dashboard or `bot_config.json`:
 | `strategy` | `trending_first` | `trending_first`: Live news queries first, then keywords and hashtags.<br>`negative_first`: Negative tags first, then keywords.<br>`balanced`: Shuffles all feeds evenly.<br>`positive_only`: Scans official feeds for troll brigading. |
 | `max_comments` | `12` | Total session comment ceiling across all accounts. |
 | `comments_per_account` | `3` | Maximum comments posted before rotating to the next account. |
+| `account_cooldown_minutes` | `15` | Minimum resting time (minutes) before an account can be re-selected in rotation to prevent anti-bot spam flags. |
 | `delay_seconds` | `120` | Base wait time between successive comments (randomized ±25%). |
 | `max_age_days` | `14` | Recency cutoff: skips posts published older than $N$ days. |
 | `headless` | `false` | `false`: Visible Chrome browser (required on first run / verification).<br>`true`: Background browser. |
 | `enable_trending` | `true` | Fetches live defense headlines via Google News RSS. |
 | `enable_vpn_rotation` | `false` | Automatically triggers VPN rotation command before switching accounts. |
 | `vpn_rotate_command` | `""` | CLI command executed to rotate VPN IP. |
-| `vpn_cooldown_seconds`| `8` | Wait duration after rotation to allow network adapters to settle. |
+| `vpn_cooldown_seconds`| `8` | Network settle timeout: maximum seconds to poll for dynamic IP change. |
 
 ---
 
@@ -224,6 +236,8 @@ You can configure the rotation command via the Dashboard or `bot_config.json`:
 | `negative_posts.csv` | Log of all flagged posts: ID, handle, permalink, caption snippet, sentiment, and response status. |
 | `response_log.csv` | Complete response audit trail: post link, generated counter-narrative text, timestamp, and status. |
 | `seen_posts.json` | Persistent deduplication index tracking processed posts across all runs. |
+| `account_registry.json` | Persistent multi-account telemetry registry: tracks session count, lifetime comments posted, last active timestamp, and IP/ISP bindings. |
+| `profiles/<username>/` | Dedicated browser user-data directories isolating local storage, IndexedDB, and canvas fingerprint per account. |
 | `monitor.log` | Consolidated, timestamped runtime execution log. |
 | `.cookies_<username>.json` | Per-account serialized session cookies for automatic session restoration. |
 | `rotate_vpn.bat` | Customizable Windows batch script for VPN command triggers. |
@@ -237,13 +251,16 @@ PR/
 ├── app.py                  # Streamlit Command Center UI & Live Telemetry Feed
 ├── bot.py                  # Core autonomous engine (scrapes, classifies, comments, rotates)
 ├── shared.py               # Shared automation framework (Selenium driver, multi-cookies, CSV I/O)
-├── vpn_manager.py          # IP verification & automated VPN rotation manager
+├── vpn_manager.py          # Dynamic IP verification & automated VPN rotation manager
+├── account_tracker.py      # Multi-account telemetry, cooldowns, and health registry
 ├── rotate_vpn.bat          # User-customizable VPN rotation batch script
 ├── accounts.txt.example    # Multi-account credentials template
 ├── bot_config.json.example # Operational settings template
 ├── .env.example            # Environment variables template
 ├── requirements.txt        # Python package dependencies
 ├── seen_posts.json         # Deduplication history (auto-generated)
+├── account_registry.json   # Multi-account health and telemetry state (auto-generated)
+├── profiles/               # Isolated Chrome user profiles per account (auto-generated)
 ├── negative_posts.csv      # Flagged negative posts log (auto-generated)
 ├── response_log.csv        # Counter-comment audit history (auto-generated)
 └── monitor.log             # Consolidated execution log (auto-generated)

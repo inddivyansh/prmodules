@@ -14,6 +14,7 @@
   "vpn_rotate_command": "",
   "vpn_cooldown_seconds": 8,
   "comments_per_account": 3,
+  "account_cooldown_minutes": 15,
   "neg_hashtags": "kashmirviolence,indianarmycrimes,armyatrocities,humanrightsviolation",
   "pos_hashtags": "indianarmy,indianarmedforces,adgpi,jaihind",
   "keywords": "indian army viral,kashmir encounter,agniveer protest,indian army fake",

@@ -698,7 +698,7 @@ with tab_bot:
                         "Location": rec.get("last_location", "") or "—",
                         "Posted": rec.get("total_comments_posted", 0),
                     })
-                st.dataframe(table_rows, use_container_width=True, hide_index=True)
+                st.dataframe(table_rows, width='stretch', hide_index=True)
 
         st.markdown("---")
 

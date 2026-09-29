@@ -479,7 +479,7 @@ with st.sidebar:
     st.markdown(f'<div class="{notice_class}">{cookie_msg}</div>', unsafe_allow_html=True)
 
     if cookie_ok:
-        if st.button("Clear Saved Cookies", use_container_width=True, type="secondary"):
+        if st.button("Clear Saved Cookies", width='stretch', type="secondary"):
             try:
                 COOKIES_FILE.unlink()
                 st.success("Session cookies removed.")
@@ -493,7 +493,7 @@ with st.sidebar:
     o_badge = "notice-box-ok" if ollama_ok else "notice-box-warn"
     st.markdown(f'<div class="{o_badge}">{ollama_msg}</div>', unsafe_allow_html=True)
     if not ollama_ok:
-        if st.button("Start Ollama Service", use_container_width=True, key="btn_sidebar_ollama"):
+        if st.button("Start Ollama Service", width='stretch', key="btn_sidebar_ollama"):
             _ensure_ollama_server()
             st.success("Ollama service started.")
             st.rerun()
@@ -586,7 +586,7 @@ with tab_bot:
         st.markdown("**Live Defense News Aggregation**")
         t_col1, t_col2 = st.columns([1, 3])
         with t_col1:
-            if st.button("Fetch Trending Defense News", use_container_width=True, key="btn_fetch_trends"):
+            if st.button("Fetch Trending Defense News", width='stretch', key="btn_fetch_trends"):
                 with st.spinner("Fetching latest defense headlines from RSS..."):
                     st.session_state.trending_topics = fetch_trending_topics(max_topics=6)
 
@@ -720,7 +720,7 @@ with tab_bot:
 
     with btn_col1:
         if not _bot_alive():
-            if st.button("Launch Bot Session", type="primary", use_container_width=True):
+            if st.button("Launch Bot Session", type="primary", width='stretch'):
                 if not ui_user.strip() or not ui_pass.strip():
                     st.error("Instagram username and password are required to launch the session.")
                 else:
@@ -731,18 +731,18 @@ with tab_bot:
                         st.info("Simulation mode active: responses will be generated but not posted.")
                     st.rerun()
         else:
-            if st.button("Stop Bot Session", type="secondary", use_container_width=True):
+            if st.button("Stop Bot Session", type="secondary", width='stretch'):
                 _stop_bot()
                 st.warning("Bot session terminated by operator.")
                 st.rerun()
 
     with btn_col2:
-        if st.button("Save Configuration", use_container_width=True):
+        if st.button("Save Configuration", width='stretch'):
             _sync_and_save()
             st.success("Configuration successfully saved to bot_config.json.")
 
     with btn_col3:
-        if st.button("Refresh", use_container_width=True):
+        if st.button("Refresh", width='stretch'):
             st.rerun()
 
     # -----------------------------------------------------------------------
@@ -783,7 +783,7 @@ with tab_bot:
                 st.caption("Engine standby. Live streaming updates automatically once a session is launched.")
         with feed_ctrl2:
             if (ROOT / "monitor.log").exists():
-                if st.button("Clear Log", use_container_width=True, key="btn_frag_clear_log"):
+                if st.button("Clear Log", width='stretch', key="btn_frag_clear_log"):
                     try:
                         (ROOT / "monitor.log").write_text("", encoding="utf-8")
                         st.success("Log cleared.")
@@ -848,7 +848,7 @@ with tab_bot:
                     with open(NEGATIVE_POSTS_CSV, newline="", encoding="utf-8") as f:
                         neg_rows = list(csv.DictReader(f))
                     if neg_rows:
-                        st.dataframe(neg_rows, use_container_width=True)
+                        st.dataframe(neg_rows, width='stretch')
                     else:
                         st.write("No flagged posts registered.")
                 except Exception as e:
@@ -873,9 +873,9 @@ with tab_triage:
 
     t_btn1, t_btn2 = st.columns([2, 1])
     with t_btn1:
-        run_batch = st.button("Run Deep Content Analysis", type="primary", use_container_width=True)
+        run_batch = st.button("Run Deep Content Analysis", type="primary", width='stretch')
     with t_btn2:
-        if st.button("Clear Review Queue", use_container_width=True):
+        if st.button("Clear Review Queue", width='stretch'):
             st.session_state.processed_posts = []
             st.session_state.clusters = []
             st.session_state.raw_input = ""

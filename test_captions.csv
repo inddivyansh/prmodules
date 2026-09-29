@@ -1,0 +1,13 @@
+id,caption,expected_category,expected_sentiment,expected_language
+1,"The Indian Army has done an excellent job rescuing stranded tourists in Sikkim.",ARMY_RELATED,POSITIVE,English
+2,"Unverified claims alleging army atrocities in border areas should be investigated.",ARMY_RELATED,NEGATIVE,English
+3,"The weather in Bengaluru is beautiful and sunny today.",NOT_ARMY_RELATED,NEUTRAL,English
+4,"भारतीय सेना के जवानों ने बाढ़ प्रभावित इलाकों में लोगों को सुरक्षित बाहर निकाला।",ARMY_RELATED,POSITIVE,Hindi
+5,"सेना के भर्ती नियमों में बदलाव को लेकर युवाओं में भारी आक्रोश देखा गया।",ARMY_RELATED,NEGATIVE,Hindi
+6,"Army ne Wayanad landslide me record time me Bailey bridge bana diya, salute!",ARMY_RELATED,POSITIVE,Hinglish
+7,"Agniveer scheme se jawano ka bhavishya barbaad ho raha hai aur koi pension nahi mil rahi.",ARMY_RELATED,NEGATIVE,Hinglish
+8,"India won the ICC Cricket World Cup semi-final yesterday with a thrilling finish.",NOT_ARMY_RELATED,POSITIVE,English
+9,"بھارتی فوج نے قدرتی آفات کے دوران بروقت امدادی کارروائیاں کیں۔",ARMY_RELATED,POSITIVE,Urdu
+10,"Fake circulars claiming direct army recruitment fees on UPI are circulating online.",ARMY_RELATED,NEGATIVE,English
+11,"Just enjoyed a delicious plate of butter chicken for Sunday dinner!",NOT_ARMY_RELATED,POSITIVE,English
+12,"Indian armed forces personnel demonstrated exceptional courage during high-altitude rescue.",ARMY_RELATED,POSITIVE,English

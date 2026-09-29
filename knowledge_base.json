@@ -1,0 +1,79 @@
+[
+  {
+    "id": "PIB-2024-001",
+    "topic": "Recruitment & Agniveer",
+    "keywords": ["agniveer", "recruitment", "exam", "admit card", "registration fee", "join indian army", "fake notification"],
+    "claim_pattern": "Fake circulars or websites claiming direct recruitment, paid entry, or unofficial Agniveer rally schedules.",
+    "official_status": "CONTRADICTED",
+    "source_name": "PIB Fact Check",
+    "source_url": "https://pib.gov.in/FactCheck/Detail.aspx?id=1291",
+    "evidence": "PIB Fact Check has confirmed that all Indian Army recruitment schedules are published exclusively on joinindianarmy.nic.in. The army does not charge application fees via third-party UPI IDs or agents. Any letters claiming paid recruitment are fraudulent.",
+    "date": "2024-03-15"
+  },
+  {
+    "id": "PIB-2024-002",
+    "topic": "Agniveer Compensation & Benefits",
+    "keywords": ["agniveer", "martyr", "compensation", "pension", "family pension", "seva nidhi", "insurance"],
+    "claim_pattern": "Claims that families of fallen Agniveers do not receive financial compensation or insurance support.",
+    "official_status": "CONTRADICTED",
+    "source_name": "Ministry of Defence",
+    "source_url": "https://mod.gov.in/press-release/agniveer-benefits-clarification",
+    "evidence": "The Ministry of Defence clarifies that the next of kin of an Agniveer who makes the supreme sacrifice in service receives over ₹1 crore in total financial assistance, including ₹48 lakh non-contributory insurance, ₹44 lakh ex-gratia, Seva Nidhi package with interest, and pay for the remaining balance of the 4-year tenure.",
+    "date": "2024-07-04"
+  },
+  {
+    "id": "PIB-2024-003",
+    "topic": "Border Operations & LAC",
+    "keywords": ["galwan", "lac", "border clash", "tawang", "chinese troops", "capture", "video", "clash"],
+    "claim_pattern": "Old, recycled, or foreign military video footage being shared as recent border clashes along the LAC.",
+    "official_status": "CONTRADICTED",
+    "source_name": "PIB Fact Check",
+    "source_url": "https://pib.gov.in/FactCheck/Detail.aspx?id=1384",
+    "evidence": "Videos circulating on social media depicting troop skirmishes are old archived clips or third-party military drills misattributed to current border sectors. The situation along the borders remains firmly monitored and under control according to established bilateral protocols.",
+    "date": "2024-05-20"
+  },
+  {
+    "id": "PIB-2024-004",
+    "topic": "Internal Security & Counter-Terrorism",
+    "keywords": ["false encounter", "fake encounter", "human rights", "civilian casualty", "atrocities", "caso", "encounter", "kashmir"],
+    "claim_pattern": "Unsubstantiated allegations that counter-terror operations targeted civilians or violated established rules of engagement.",
+    "official_status": "CONTRADICTED",
+    "source_name": "ADGPI Indian Army",
+    "source_url": "https://indianarmy.nic.in/press-releases/internal-security-clarification",
+    "evidence": "All counter-terror operations are conducted with strict adherence to human rights guidelines, institutional Rules of Engagement (RoE), and supreme court directives. Operations prioritize the safety of local residents and are conducted jointly with local civil police.",
+    "date": "2024-06-11"
+  },
+  {
+    "id": "PIB-2024-005",
+    "topic": "Disaster Relief & Humanitarian Assistance (HADR)",
+    "keywords": ["flood rescue", "wayanad", "landslide", "assam floods", "himachal floods", "bridge construction", "bailey bridge", "rescue"],
+    "claim_pattern": "Indian Army deployed for humanitarian assistance, bridge construction, and disaster relief operations.",
+    "official_status": "SUPPORTED",
+    "source_name": "ADGPI Indian Army",
+    "source_url": "https://indianarmy.nic.in/press-releases/hadr-operations",
+    "evidence": "Indian Army Engineer Regiments and medical teams are actively deployed across flood- and landslide-affected regions, executing swift evacuation, constructing emergency Bailey bridges, and providing critical medical support under Operation Sadbhavana and national HADR mandates.",
+    "date": "2024-08-02"
+  },
+  {
+    "id": "PIB-2024-006",
+    "topic": "Defence Procurement & Equipment",
+    "keywords": ["equipment failure", "faulty weapons", "bulletproof jackets", "procurement scam", "artillery", "rifles"],
+    "claim_pattern": "Allegations claiming substandard gear, ammunition shortages, or procurement irregularities for frontline troops.",
+    "official_status": "CONTRADICTED",
+    "source_name": "Ministry of Defence",
+    "source_url": "https://mod.gov.in/press-release/procurement-standards",
+    "evidence": "All weapons, body armor, and frontline equipment undergo rigorous field trials and multi-tier quality checks under DGQA (Directorate General of Quality Assurance) prior to troop induction. The Indian Armed Forces operate with modernized, certified inventory meeting global standards.",
+    "date": "2024-02-18"
+  },
+  {
+    "id": "PIB-2024-007",
+    "topic": "Veterans & ECHS Medical Benefits",
+    "keywords": ["echs", "veteran pension", "sparsh", "delays", "denied treatment", "military hospital"],
+    "claim_pattern": "Rumors claiming shutdown of Ex-Servicemen Contributory Health Scheme (ECHS) or freezing of SPARSH pension disbursements.",
+    "official_status": "CONTRADICTED",
+    "source_name": "PIB Fact Check",
+    "source_url": "https://pib.gov.in/FactCheck/Detail.aspx?id=1412",
+    "evidence": "ECHS empanelment and healthcare facilities remain fully operational across all regional centers. SPARSH digital pension disbursements occur routinely on schedule every month with dedicated grievance redressal cells active across all commands.",
+    "date": "2024-04-10"
+  }
+]

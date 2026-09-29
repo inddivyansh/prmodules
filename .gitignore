@@ -1,8 +1,11 @@
 .env
 .instagram_session.json
 .instagram_cookies.json
+seen_posts.json
 review_queue.csv
 audit_log.csv
+negative_posts.csv
+response_log.csv
 *.log
 *.png
 __pycache__/

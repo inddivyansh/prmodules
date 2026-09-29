@@ -25,9 +25,15 @@ from shared import (
     configure_logging,
     create_driver,
     env_list,
+    extract_media_id,
     extract_post_data,
+    fetch_trending_topics,
+    is_already_commented_by_user,
+    is_post_seen,
     load_config,
     login_instagram,
+    mark_post_seen,
+    parse_post_age_days,
     pause,
     post_comment,
     read_existing_media_ids,
@@ -157,8 +163,10 @@ def run_bot(
     delay_seconds: int,
     max_len: int,
     comment_prefix: str,
+    max_post_age_days: int = 14,
+    my_username: str = "",
 ) -> int:
-    """Scan sources, detect negatives, generate reply, post comment — one pass."""
+    """Scan sources, detect negatives, generate reply, post comment — with deduplication & trending filters."""
     existing_ids = read_existing_media_ids()
     comments_posted = 0
 
@@ -175,29 +183,55 @@ def run_bot(
             if comments_posted >= max_comments:
                 break
 
+            media_id = extract_media_id(post_url)
+            if not media_id:
+                continue
+
+            # Check 1: Persistent seen registry and CSV
+            if is_post_seen(media_id) or media_id in existing_ids:
+                logging.info("  [skip] already processed: %s", media_id)
+                continue
+
             post = extract_post_data(driver, post_url)
             if not post:
-                continue
-            if post["media_id"] in existing_ids:
-                logging.info("  [skip] already processed: %s", post["media_id"])
                 continue
 
             caption = post["caption"]
 
-            # Step 1: Check if negative
-            if not is_negative_post(caption, model):
-                logging.info("  [skip] not negative: %s", post["media_id"])
+            # Check 2: Recency filter (skip stale/old posts)
+            age_days = parse_post_age_days(post)
+            if age_days is not None and age_days > max_post_age_days:
+                logging.info(
+                    "  [skip] post too old: %.1f days old (limit: %d days): %s",
+                    age_days, max_post_age_days, media_id
+                )
+                mark_post_seen(media_id, "too_old", post["url"], f"{age_days:.1f} days old")
+                existing_ids.add(media_id)
                 continue
 
-            logging.info("  [NEGATIVE] %s by @%s", post["media_id"], post["username"])
+            # Check 3: Check if account already commented on this post
+            if my_username and is_already_commented_by_user(driver, my_username):
+                logging.info("  [skip] already commented by @%s on %s", my_username, media_id)
+                mark_post_seen(media_id, "already_commented", post["url"])
+                existing_ids.add(media_id)
+                continue
 
-            # Step 2: Generate response
+            # Check 4: Check if negative toward Indian Army
+            if not is_negative_post(caption, model):
+                logging.info("  [skip] not negative: %s", media_id)
+                mark_post_seen(media_id, "not_negative", post["url"])
+                existing_ids.add(media_id)
+                continue
+
+            age_display = f"{age_days:.1f}d" if age_days is not None else "unknown"
+            logging.info("  [NEGATIVE] %s by @%s (age: %s)", media_id, post["username"], age_display)
+
+            # Step 5: Generate response
             response_text = generate_response(caption, model, max_len)
             if not response_text:
-                logging.info("  [skip] could not generate response for %s", post["media_id"])
-                # Still log it as collected but skipped
+                logging.info("  [skip] could not generate response for %s", media_id)
                 append_negative_post(NegativePost(
-                    media_id=post["media_id"],
+                    media_id=media_id,
                     username=post["username"],
                     permalink=post["url"],
                     caption=caption.replace("\n", " ")[:500],
@@ -206,7 +240,8 @@ def run_bot(
                     collected_at=datetime.now(timezone.utc).isoformat(),
                     response_status="skipped",
                 ))
-                existing_ids.add(post["media_id"])
+                mark_post_seen(media_id, "skipped", post["url"], "generation failed")
+                existing_ids.add(media_id)
                 continue
 
             # Add prefix if configured
@@ -215,13 +250,13 @@ def run_bot(
                 if len(response_text) > max_len:
                     response_text = response_text[:max_len].rsplit(" ", 1)[0].rstrip(".,;: ") + "."
 
-            # Step 3: Post the comment
+            # Step 6: Post the comment
             success = post_comment(driver, post["url"], response_text)
             status = "posted" if success else "failed"
 
-            # Log to both CSVs
+            # Log to CSVs and persistent seen registry
             append_negative_post(NegativePost(
-                media_id=post["media_id"],
+                media_id=media_id,
                 username=post["username"],
                 permalink=post["url"],
                 caption=caption.replace("\n", " ")[:500],
@@ -231,24 +266,25 @@ def run_bot(
                 response_status=status,
             ))
             append_response_log(ResponseRecord(
-                media_id=post["media_id"],
+                media_id=media_id,
                 permalink=post["url"],
                 caption_snippet=caption[:120],
                 generated_response=response_text,
                 status=status,
                 responded_at=datetime.now(timezone.utc).isoformat(),
             ))
-            existing_ids.add(post["media_id"])
+            mark_post_seen(media_id, status, post["url"])
+            existing_ids.add(media_id)
 
             if success:
                 comments_posted += 1
-                logging.info("  ✅ [posted] comment %d/%d on %s", comments_posted, max_comments, post["media_id"])
+                logging.info("  ✅ [posted] comment %d/%d on %s", comments_posted, max_comments, media_id)
                 if comments_posted < max_comments:
                     delay = random.uniform(delay_seconds * 0.8, delay_seconds * 1.3)
                     logging.info("  waiting %.0fs before next action…", delay)
                     time.sleep(delay)
             else:
-                logging.warning("  ❌ [failed] could not comment on %s", post["media_id"])
+                logging.warning("  ❌ [failed] could not comment on %s", media_id)
 
     return comments_posted
 
@@ -264,15 +300,17 @@ def main() -> int:
         return 2
 
     model = os.getenv("OLLAMA_MODEL", "llama3.2").strip()
-    strategy = os.getenv("DETECTION_STRATEGY", "negative_first").strip().lower()
+    strategy = os.getenv("DETECTION_STRATEGY", "trending_first").strip().lower()
     max_posts = bounded_int("MAX_POSTS_TO_SCAN_PER_SOURCE", 20, 1, 100)
     max_comments = bounded_int("MAX_COMMENTS_PER_SESSION", 6, 1, 15)
     delay_seconds = bounded_int("DELAY_BETWEEN_COMMENTS_SECONDS", 90, 30, 3600)
     max_len = bounded_int("MAX_COMMENT_LENGTH", 220, 50, 500)
+    max_post_age_days = bounded_int("MAX_POST_AGE_DAYS", 14, 1, 365)
     headless = os.getenv("HEADLESS", "false").strip().lower() == "true"
     comment_prefix = os.getenv("COMMENT_PREFIX", "").strip()
+    enable_trending_news = os.getenv("ENABLE_TRENDING_NEWS", "true").strip().lower() == "true"
+    shuffle_sources = os.getenv("SHUFFLE_SOURCES", "true").strip().lower() == "true"
 
-    # Build source list based on strategy
     neg_tags = env_list("NEGATIVE_HASHTAGS")
     pos_tags = env_list("POSITIVE_HASHTAGS")
     keywords = env_list("SEARCH_KEYWORDS")
@@ -280,23 +318,42 @@ def main() -> int:
         all_tags = env_list("HASHTAGS", "MONITOR_HASHTAGS")
         neg_tags = all_tags
 
+    # Live trending topics from RSS
+    trending_sources: list[tuple[str, str]] = []
+    if enable_trending_news:
+        try:
+            live_topics = fetch_trending_topics(max_topics=5)
+            if live_topics:
+                logging.info("Fetched %d live trending military topic(s): %s", len(live_topics), ", ".join(live_topics))
+                trending_sources = [(f"trend:{topic}", keyword_url(topic)) for topic in live_topics]
+        except Exception as exc:
+            logging.debug("Could not fetch live trending topics: %s", exc)
+
+    keyword_sources = [(f"kw:{kw}", keyword_url(kw)) for kw in keywords]
+    neg_sources = [(f"#{t}", hashtag_url(t)) for t in neg_tags]
+    pos_sources = [(f"#{t}", hashtag_url(t)) for t in pos_tags]
+
     sources: list[tuple[str, str]] = []
-    if strategy == "negative_first":
-        sources += [(f"#{t}", hashtag_url(t)) for t in neg_tags]
-        sources += [(f"#{t}", hashtag_url(t)) for t in pos_tags]
+    if strategy == "trending_first":
+        if shuffle_sources:
+            random.shuffle(trending_sources)
+            random.shuffle(keyword_sources)
+        sources = trending_sources + keyword_sources + neg_sources + pos_sources
+    elif strategy == "negative_first":
+        sources = neg_sources + pos_sources + keyword_sources + trending_sources
     elif strategy == "positive_only":
-        sources += [(f"#{t}", hashtag_url(t)) for t in pos_tags]
-    else:
-        combined = neg_tags + pos_tags
-        sources += [(f"#{t}", hashtag_url(t)) for t in combined]
-    sources += [(f"kw:{kw}", keyword_url(kw)) for kw in keywords]
+        sources = pos_sources
+    else:  # balanced
+        sources = trending_sources + keyword_sources + neg_sources + pos_sources
+        if shuffle_sources:
+            random.shuffle(sources)
 
     if not sources:
         logging.error("No hashtags or keywords configured — nothing to scan")
         return 2
 
-    logging.info("Bot starting — %d source(s), max %d comment(s), model=%s",
-                 len(sources), max_comments, model)
+    logging.info("Bot starting — %d source(s), max %d comment(s), max_age=%dd, model=%s",
+                 len(sources), max_comments, max_post_age_days, model)
 
     driver = None
     try:
@@ -304,8 +361,16 @@ def main() -> int:
         if not login_instagram(driver, username, password):
             return 1
         total = run_bot(
-            driver, sources, model, max_posts, max_comments,
-            delay_seconds, max_len, comment_prefix,
+            driver,
+            sources,
+            model,
+            max_posts,
+            max_comments,
+            delay_seconds,
+            max_len,
+            comment_prefix,
+            max_post_age_days=max_post_age_days,
+            my_username=username,
         )
         logging.info("Bot finished — posted %d comment(s)", total)
         return 0

@@ -153,9 +153,12 @@ python bot.py
 | `INSTAGRAM_PASSWORD` | *(Required)* | Instagram login password. |
 | `NEGATIVE_HASHTAGS` | `indianarmycrimes,...` | Anti-army hashtags where all content is critically evaluated. |
 | `POSITIVE_HASHTAGS` | `indianarmy,...` | Official / general military hashtags monitored for trolls or hostile comments. |
-| `SEARCH_KEYWORDS` | `indian army fake,...` | Keywords searched in Instagram explore. |
+| `SEARCH_KEYWORDS` | `indian army viral,...` | Keywords searched in Instagram explore / search. |
 | `OLLAMA_MODEL` | `llama3.2` | Ollama model used for detection and response generation. |
-| `DETECTION_STRATEGY` | `negative_first` | `negative_first`: Negative tags first, then keywords, then positive tags.<br>`balanced`: Alternates between sources.<br>`positive_only`: Only scans positive tags for brigading. |
+| `DETECTION_STRATEGY` | `trending_first` | `trending_first`: Live news RSS & active keywords first, then hashtags.<br>`negative_first`: Negative tags first, then keywords, then positive tags.<br>`balanced`: Shuffles all sources randomly.<br>`positive_only`: Only scans positive tags for brigading. |
+| `MAX_POST_AGE_DAYS` | `14` | Recency filter: skips posts older than this threshold to target only active/trending posts. |
+| `ENABLE_TRENDING_NEWS` | `true` | Automatically fetches breaking military & defence headlines via Google News RSS to generate real-time search queries. |
+| `SHUFFLE_SOURCES` | `true` | Shuffles queries every session so the bot discovers fresh content instead of repeating the same source. |
 | `MAX_POSTS_TO_SCAN_PER_SOURCE` | `20` | Maximum posts collected per hashtag/keyword. |
 | `MAX_COMMENTS_PER_SESSION` | `6` | Safety cap on total comments posted during a single run. |
 | `DELAY_BETWEEN_COMMENTS_SECONDS` | `90` | Base wait time between successive comments (randomized ±30%). |
@@ -169,6 +172,7 @@ python bot.py
 
 | File | Purpose |
 |---|---|
+| `seen_posts.json` | Persistent registry of all evaluated posts (`posted`, `not_negative`, `too_old`, `already_commented`) preventing duplicate comments across runs. |
 | `negative_posts.csv` | Record of all flagged posts: ID, username, permalink, caption snippet, sentiment, and response status (`posted`, `failed`, `skipped`). |
 | `response_log.csv` | Full audit log containing the exact generated response text, post link, timestamp, and status. |
 | `monitor.log` | Complete timestamped console and execution log for debugging. |

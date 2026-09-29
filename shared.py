@@ -6,15 +6,20 @@ used by both collector.py and responder.py.
 from __future__ import annotations
 
 import csv
+import io
 import json
 import logging
 import os
 import random
+import re
 import time
+import urllib.request
+import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
-import io
+from typing import Any
+
 import requests
 from PIL import Image
 
@@ -46,6 +51,7 @@ LOG_FILE = ROOT / "monitor.log"
 COOKIES_FILE = ROOT / ".instagram_cookies.json"
 NEGATIVE_POSTS_CSV = ROOT / "negative_posts.csv"
 RESPONSE_LOG_CSV = ROOT / "response_log.csv"
+SEEN_POSTS_FILE = ROOT / "seen_posts.json"
 
 
 # ---------------------------------------------------------------------------
@@ -461,25 +467,108 @@ def login_instagram(driver: webdriver.Chrome, username: str, password: str) -> b
 # Instagram scraping helpers
 # ---------------------------------------------------------------------------
 
+def extract_media_id(url: str) -> str:
+    """Extract canonical media identifier from Instagram /p/, /reel/, /reels/, or /tv/ URL."""
+    if not url:
+        return ""
+    clean = url.split("?")[0].rstrip("/")
+    for token in ("/p/", "/reel/", "/reels/", "/tv/"):
+        if token in clean:
+            part = clean.split(token, 1)[-1].strip("/")
+            return part.split("/", 1)[0]
+    return clean.split("/")[-1]
+
+
+def is_already_commented_by_user(driver: webdriver.Chrome, username: str) -> bool:
+    """Check whether our account has already posted a comment on the currently opened post."""
+    if not username:
+        return False
+    target = username.strip().lower()
+    try:
+        selectors = (
+            "//ul//h3//a",
+            "//ul//a[@role='link']",
+            "//div[contains(@class, 'comment')]//a",
+            "//span[contains(@class, '_ap3a') and contains(@class, '_aaco')]",
+        )
+        for sel in selectors:
+            for el in driver.find_elements(By.XPATH, sel):
+                txt = (el.text or "").strip().lower()
+                href = (el.get_attribute("href") or "").lower()
+                if txt == target or f"/{target}/" in href:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def parse_post_age_days(post: dict[str, Any]) -> float | None:
+    """Calculate the age of the post in days, or None if undetermined."""
+    ts_str = post.get("post_timestamp")
+    if ts_str:
+        try:
+            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            return (datetime.now(timezone.utc) - dt).total_seconds() / 86400.0
+        except Exception:
+            pass
+
+    caption = post.get("caption", "")
+    match = re.search(r"on\s+([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})", caption)
+    if match:
+        month_name, day_str, year_str = match.groups()
+        try:
+            dt = datetime.strptime(f"{month_name} {day_str} {year_str}", "%B %d %Y").replace(tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc) - dt).total_seconds() / 86400.0
+        except Exception:
+            pass
+
+    return None
+
+
 def scroll_and_load(driver: webdriver.Chrome, scrolls: int = 2) -> None:
     for _ in range(scrolls):
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         pause(2)
 
 
-def collect_post_links(driver: webdriver.Chrome, url: str, max_posts: int) -> list[str]:
-    """Navigate to *url* and collect up to *max_posts* unique post links."""
+def collect_post_links(driver: webdriver.Chrome, url: str, max_posts: int, scrolls: int = 4) -> list[str]:
+    """Navigate to *url* and collect up to *max_posts* unique post/reel links."""
     try:
         driver.get(url)
-        pause(3)
-        scroll_and_load(driver)
+        pause(3.0)
+        _dismiss_dialogs(driver)
+
         links: list[str] = []
-        for anchor in driver.find_elements(By.XPATH, "//a[contains(@href, '/p/')]"):
-            href = anchor.get_attribute("href")
-            if href and "/p/" in href and href not in links:
-                links.append(href)
+        seen_ids: set[str] = set()
+
+        for _ in range(scrolls):
+            anchors = driver.find_elements(
+                By.XPATH,
+                "//a[contains(@href, '/p/') or contains(@href, '/reel/') or contains(@href, '/reels/')]"
+            )
+            for anchor in anchors:
+                try:
+                    href = anchor.get_attribute("href")
+                    if not href:
+                        continue
+                    clean_url = href.split("?")[0]
+                    media_id = extract_media_id(clean_url)
+                    if media_id and media_id not in seen_ids:
+                        seen_ids.add(media_id)
+                        # Canonicalize to standard /p/ URL for unified DOM rendering in desktop browser
+                        norm_url = f"https://www.instagram.com/p/{media_id}/"
+                        links.append(norm_url)
+                    if len(links) >= max_posts:
+                        break
+                except StaleElementReferenceException:
+                    continue
+
             if len(links) >= max_posts:
                 break
+
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            pause(2.5)
+
         return links
     except WebDriverException as exc:
         logging.warning("Could not load %s: %s", url, exc)
@@ -502,7 +591,7 @@ def extract_image_text(image_url: str) -> str:
 
 
 def extract_post_data(driver: webdriver.Chrome, post_url: str) -> dict[str, str] | None:
-    """Return {url, username, caption, media_id, image_url, ocr_text} or None on failure."""
+    """Return post metadata dictionary including recency timestamp, or None on failure."""
     try:
         driver.get(post_url)
         pause(3)
@@ -518,6 +607,17 @@ def extract_post_data(driver: webdriver.Chrome, post_url: str) -> dict[str, str]
             if elements and elements[0].text.strip():
                 username = elements[0].text.strip()
                 break
+
+        # --- timestamp / recency ---
+        post_timestamp = ""
+        try:
+            for time_el in driver.find_elements(By.XPATH, "//article//time | //time"):
+                dt_val = time_el.get_attribute("datetime")
+                if dt_val:
+                    post_timestamp = dt_val
+                    break
+        except Exception:
+            pass
 
         # --- caption ---
         caption = ""
@@ -554,7 +654,7 @@ def extract_post_data(driver: webdriver.Chrome, post_url: str) -> dict[str, str]
         if image_url:
             ocr_text = extract_image_text(image_url)
 
-        media_id = post_url.split("/p/", 1)[-1].split("/", 1)[0]
+        media_id = extract_media_id(post_url)
         return {
             "url": post_url,
             "username": username,
@@ -562,6 +662,7 @@ def extract_post_data(driver: webdriver.Chrome, post_url: str) -> dict[str, str]
             "media_id": media_id,
             "image_url": image_url,
             "ocr_text": ocr_text,
+            "post_timestamp": post_timestamp,
         }
     except WebDriverException as exc:
         logging.warning("Could not extract post data from %s: %s", post_url, exc)
@@ -581,10 +682,7 @@ def post_comment(driver: webdriver.Chrome, post_url: str, comment_text: str) -> 
     """
     try:
         # Check if driver is already on this post's page
-        shortcode = ""
-        if "/p/" in post_url:
-            shortcode = post_url.split("/p/", 1)[-1].split("/", 1)[0]
-
+        shortcode = extract_media_id(post_url)
         if not shortcode or shortcode not in driver.current_url:
             driver.get(post_url)
             pause(random.uniform(2.5, 3.5))
@@ -822,16 +920,123 @@ def read_negative_posts_csv() -> list[dict[str, str]]:
         return list(csv.DictReader(fh))
 
 
-def read_existing_media_ids() -> set[str]:
-    """Return media_ids that were successfully posted or intentionally skipped.
+def load_seen_posts() -> dict[str, dict]:
+    """Load persistent registry of evaluated posts, seeding from negative_posts.csv if needed."""
+    data: dict[str, dict] = {}
+    if SEEN_POSTS_FILE.exists():
+        try:
+            loaded = json.loads(SEEN_POSTS_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        except Exception:
+            data = {}
 
-    Failed attempts are excluded so the bot can retry them on subsequent runs.
-    """
-    return {
-        row["media_id"]
-        for row in read_negative_posts_csv()
-        if row.get("media_id") and row.get("response_status") in ("posted", "skipped")
+    # Seed from negative_posts.csv so existing posted items aren't lost
+    if NEGATIVE_POSTS_CSV.exists():
+        try:
+            for row in read_negative_posts_csv():
+                mid = row.get("media_id")
+                if mid and mid not in data:
+                    data[mid] = {
+                        "status": row.get("response_status", "posted"),
+                        "permalink": row.get("permalink", ""),
+                        "note": "seeded_from_csv",
+                        "updated_at": row.get("collected_at", datetime.now(timezone.utc).isoformat()),
+                    }
+        except Exception:
+            pass
+
+    return data
+
+
+def save_seen_posts(data: dict[str, dict]) -> None:
+    try:
+        SEEN_POSTS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception as exc:
+        logging.warning("Could not save seen_posts.json: %s", exc)
+
+
+def mark_post_seen(media_id: str, status: str, permalink: str = "", note: str = "") -> None:
+    """Record status in persistent seen_posts.json."""
+    if not media_id:
+        return
+    data = load_seen_posts()
+    data[media_id] = {
+        "status": status,
+        "permalink": permalink,
+        "note": note,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    save_seen_posts(data)
+
+
+def is_post_seen(media_id: str, skip_not_negative: bool = True) -> bool:
+    """Return True if media_id has already been processed and should be skipped."""
+    if not media_id:
+        return False
+    data = load_seen_posts()
+    entry = data.get(media_id)
+    if not entry:
+        return False
+    status = entry.get("status")
+    if status in ("posted", "already_commented", "too_old", "skipped"):
+        return True
+    if status == "not_negative" and skip_not_negative:
+        return True
+    return False
+
+
+def read_existing_media_ids() -> set[str]:
+    """Return media_ids that were already handled (posted, skipped, commented, too old, not negative)."""
+    handled = set()
+    # 1. From CSV
+    for row in read_negative_posts_csv():
+        if row.get("media_id") and row.get("response_status") in ("posted", "skipped"):
+            handled.add(row["media_id"])
+    # 2. From seen_posts.json
+    for mid, info in load_seen_posts().items():
+        if info.get("status") in ("posted", "skipped", "already_commented", "too_old", "not_negative"):
+            handled.add(mid)
+    return handled
+
+
+def fetch_trending_topics(max_topics: int = 6) -> list[str]:
+    """Fetch live trending news topics related to Indian Army / defence from Google News RSS.
+
+    Extracts clean keywords suitable for Instagram keyword search.
+    """
+    rss_urls = [
+        "https://news.google.com/rss/search?q=Indian+Army+when:3d&hl=en-IN&gl=IN&ceid=IN:en",
+        "https://news.google.com/rss/search?q=Agniveer+OR+Kashmir+encounter+when:3d&hl=en-IN&gl=IN&ceid=IN:en",
+    ]
+    extracted: list[str] = []
+    seen: set[str] = set()
+
+    for url in rss_urls:
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                tree = ET.fromstring(resp.read())
+                for item in tree.findall(".//item")[:5]:
+                    title_elem = item.find("title")
+                    if title_elem is None or not title_elem.text:
+                        continue
+                    raw_title = title_elem.text.rsplit("-", 1)[0].strip()
+                    clean_title = re.sub(r"[^\w\s]", " ", raw_title).strip()
+                    stop_words = {"the", "for", "and", "with", "from", "near", "under", "after", "into", "over"}
+                    words = [w for w in clean_title.split() if len(w) > 2 and w.lower() not in stop_words]
+                    if len(words) >= 2:
+                        query = " ".join(words[:4])
+                        if query.lower() not in seen:
+                            seen.add(query.lower())
+                            extracted.append(query)
+        except Exception as exc:
+            logging.debug("Could not fetch RSS from %s: %s", url, exc)
+
+    return extracted[:max_topics]
 
 
 def append_negative_post(post: NegativePost) -> None:

@@ -22,15 +22,18 @@ from pipeline import analyze_instagram_url, analyze_post_content, publish_approv
 from reporter import generate_sitrep
 from verifier import load_knowledge_base
 from shared import (
+    ACCOUNTS_FILE,
     ALT_COOKIES_FILE,
     COOKIES_FILE,
     NEGATIVE_POSTS_CSV,
     RESPONSE_LOG_CSV,
     ROOT,
     fetch_trending_topics,
+    load_accounts,
     load_seen_posts,
     read_negative_posts_csv,
 )
+from vpn_manager import detect_installed_vpn, get_current_ip, rotate_vpn
 
 # ---------------------------------------------------------------------------
 # Page configuration
@@ -206,6 +209,10 @@ DEFAULT_CONFIG = {
     "comment_prefix": "",
     "enable_trending": True,
     "shuffle_sources": True,
+    "enable_vpn_rotation": False,
+    "vpn_rotate_command": "",
+    "vpn_cooldown_seconds": 8,
+    "comments_per_account": 3,
     "neg_hashtags": "indianarmycrimes,armyatrocities,kashmirviolence,humanrightsviolation",
     "pos_hashtags": "indianarmy,indianarmedforces,adgpi,jaihind",
     "keywords": "indian army viral,kashmir encounter,agniveer protest,indian army fake",
@@ -268,6 +275,10 @@ if "initialized" not in st.session_state:
     st.session_state.comment_prefix = str(saved_cfg.get("comment_prefix", ""))
     st.session_state.enable_trending = bool(saved_cfg.get("enable_trending", True))
     st.session_state.shuffle_sources = bool(saved_cfg.get("shuffle_sources", True))
+    st.session_state.enable_vpn_rotation = bool(saved_cfg.get("enable_vpn_rotation", False))
+    st.session_state.vpn_rotate_command = str(saved_cfg.get("vpn_rotate_command", ""))
+    st.session_state.vpn_cooldown_seconds = int(saved_cfg.get("vpn_cooldown_seconds", 8))
+    st.session_state.comments_per_account = int(saved_cfg.get("comments_per_account", 3))
     st.session_state.neg_hashtags = str(saved_cfg.get("neg_hashtags", DEFAULT_CONFIG["neg_hashtags"]))
     st.session_state.pos_hashtags = str(saved_cfg.get("pos_hashtags", DEFAULT_CONFIG["pos_hashtags"]))
     st.session_state.keywords = str(saved_cfg.get("keywords", DEFAULT_CONFIG["keywords"]))
@@ -559,6 +570,75 @@ with tab_bot:
         c_badge = "notice-box-ok" if cookie_active else "notice-box-warn"
         st.markdown(f'<div class="{c_badge}">{cookie_text}</div>', unsafe_allow_html=True)
 
+        # Multi-Account & VPN Rotation Section
+        with st.expander("Multi-Account Rotation & Automated VPN Switching", expanded=False):
+            st.caption("Rotate between multiple Instagram accounts with isolated sessions and automatically switch VPN connections before each ID.")
+
+            raw_accounts = ACCOUNTS_FILE.read_text(encoding="utf-8") if ACCOUNTS_FILE.exists() else ""
+            ui_accounts = st.text_area(
+                "Multi-Account Credentials (accounts.txt)",
+                value=raw_accounts,
+                height=90,
+                placeholder="# Format: username:password (one per line)\narmy_supporter_01:pass123\narmy_supporter_02:pass456",
+                help="Format: username:password (one per line). When populated, the bot rotates through these accounts automatically.",
+                key="cfg_accounts_txt",
+            )
+
+            # Count accounts
+            parsed_accts = [line.strip().split(":", 1) for line in ui_accounts.splitlines() if line.strip() and not line.strip().startswith("#") and ":" in line]
+            if parsed_accts:
+                st.info(f"Loaded {len(parsed_accts)} rotation account(s): {', '.join(f'@{u.strip()}' for u, _ in parsed_accts)}")
+
+            v_col1, v_col2 = st.columns(2)
+            with v_col1:
+                ui_enable_vpn = st.checkbox(
+                    "Enable Automated VPN Rotation",
+                    value=st.session_state.enable_vpn_rotation,
+                    key="cfg_enable_vpn",
+                    help="Trigger VPN rotation command before switching to each account.",
+                )
+                ui_cpa = st.number_input(
+                    "Comments per Account before rotating",
+                    min_value=1,
+                    max_value=20,
+                    value=int(st.session_state.comments_per_account),
+                    step=1,
+                    key="cfg_comments_per_acct",
+                )
+            with v_col2:
+                ui_vpn_cmd = st.text_input(
+                    "VPN Rotation Command (or script)",
+                    value=st.session_state.vpn_rotate_command,
+                    placeholder="e.g. python vpn_manager.py rotate",
+                    key="cfg_vpn_cmd",
+                    help="CLI command or script executed prior to launching each account. Leave blank to auto-detect installed CLIs (Windscribe, Proton, WARP) or rotate_vpn.bat.",
+                )
+                ui_vpn_cd = st.number_input(
+                    "Network Settle Cooldown (seconds)",
+                    min_value=3,
+                    max_value=60,
+                    value=int(st.session_state.vpn_cooldown_seconds),
+                    step=1,
+                    key="cfg_vpn_cd",
+                    help="Seconds to pause after VPN switch to allow network routes and DNS to settle.",
+                )
+
+            t_col1, t_col2 = st.columns([1, 2])
+            with t_col1:
+                if st.button("Test VPN Rotation Now", key="btn_test_vpn"):
+                    with st.spinner("Executing VPN rotation test..."):
+                        res = rotate_vpn(command=ui_vpn_cmd, cooldown_seconds=int(ui_vpn_cd))
+                        if res.get("changed"):
+                            st.success(f"IP changed: {res.get('old_ip')} -> {res.get('new_ip')}")
+                        else:
+                            st.info(f"Public IP: {res.get('new_ip')} ({res.get('message', '')})")
+            with t_col2:
+                detected_vpns = detect_installed_vpn()
+                if detected_vpns:
+                    st.caption("Detected CLI tools: " + ", ".join(f"`{k}`" for k in detected_vpns.keys()))
+                else:
+                    st.caption("Custom script template available in `rotate_vpn.bat`.")
+
         st.markdown("---")
 
         # 2. Target Sources
@@ -699,8 +779,20 @@ with tab_bot:
         st.session_state.shuffle_sources = ui_shuffle
         st.session_state.dry_run = ui_dry_run
         st.session_state.comment_prefix = ui_prefix.strip()
+        st.session_state.enable_vpn_rotation = ui_enable_vpn
+        st.session_state.vpn_rotate_command = ui_vpn_cmd.strip()
+        st.session_state.vpn_cooldown_seconds = int(ui_vpn_cd)
+        st.session_state.comments_per_account = int(ui_cpa)
 
         _save_credentials(st.session_state.ig_username, st.session_state.ig_password)
+
+        if ui_accounts.strip():
+            ACCOUNTS_FILE.write_text(ui_accounts.strip() + "\n", encoding="utf-8")
+        elif ACCOUNTS_FILE.exists() and not ui_accounts.strip():
+            try:
+                ACCOUNTS_FILE.unlink()
+            except Exception:
+                pass
 
         cfg_dict = {
             "model": st.session_state.ollama_model,
@@ -714,6 +806,10 @@ with tab_bot:
             "comment_prefix": st.session_state.comment_prefix,
             "enable_trending": st.session_state.enable_trending,
             "shuffle_sources": st.session_state.shuffle_sources,
+            "enable_vpn_rotation": st.session_state.enable_vpn_rotation,
+            "vpn_rotate_command": st.session_state.vpn_rotate_command,
+            "vpn_cooldown_seconds": st.session_state.vpn_cooldown_seconds,
+            "comments_per_account": st.session_state.comments_per_account,
             "neg_hashtags": st.session_state.neg_hashtags,
             "pos_hashtags": st.session_state.pos_hashtags,
             "keywords": st.session_state.keywords,
@@ -728,8 +824,9 @@ with tab_bot:
     with btn_col1:
         if not _bot_alive():
             if st.button("Launch Bot Session", type="primary", width='stretch'):
-                if not ui_user.strip() or not ui_pass.strip():
-                    st.error("Instagram username and password are required to launch the session.")
+                has_auth = (ui_user.strip() and ui_pass.strip()) or (ACCOUNTS_FILE.exists() and bool(load_accounts(ACCOUNTS_FILE))) or bool(parsed_accts)
+                if not has_auth:
+                    st.error("Instagram credentials are required. Fill username/password or add accounts to accounts.txt.")
                 else:
                     _sync_and_save()
                     _launch_bot()

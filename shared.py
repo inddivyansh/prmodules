@@ -50,9 +50,43 @@ ROOT = Path(__file__).resolve().parent
 LOG_FILE = ROOT / "monitor.log"
 COOKIES_FILE = ROOT / ".instagram_cookies.json"
 ALT_COOKIES_FILE = ROOT / "cookies.json"
+ACCOUNTS_FILE = ROOT / "accounts.txt"
 NEGATIVE_POSTS_CSV = ROOT / "negative_posts.csv"
 RESPONSE_LOG_CSV = ROOT / "response_log.csv"
 SEEN_POSTS_FILE = ROOT / "seen_posts.json"
+
+
+def get_cookies_file(username: str | None = None) -> tuple[Path, Path]:
+    """Get the primary (.cookies_user.json) and alternate (cookies_user.json) cookie paths."""
+    if username:
+        clean = re.sub(r"[^a-zA-Z0-9_.-]", "", username.strip().lower())
+        if clean:
+            return ROOT / f".cookies_{clean}.json", ROOT / f"cookies_{clean}.json"
+    return COOKIES_FILE, ALT_COOKIES_FILE
+
+
+def load_accounts(file_path: Path | str | None = None) -> list[tuple[str, str]]:
+    """Parse list of accounts (username:password) from text file."""
+    path = Path(file_path) if file_path else ACCOUNTS_FILE
+    if not path.exists():
+        return []
+    accounts: list[tuple[str, str]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for idx, line in enumerate(lines, start=1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if ":" in line:
+                user, pwd = line.split(":", 1)
+                user, pwd = user.strip(), pwd.strip()
+                if user and pwd:
+                    accounts.append((user, pwd))
+            else:
+                logging.warning("Line %d in %s has invalid account format (expected user:pass)", idx, path.name)
+    except Exception as exc:
+        logging.warning("Failed to load accounts from %s: %s", path.name, exc)
+    return accounts
 
 
 # ---------------------------------------------------------------------------
@@ -257,8 +291,8 @@ def _human_type(element, text: str) -> None:
         time.sleep(random.uniform(0.05, 0.18))
 
 
-def _save_cookies(driver: webdriver.Chrome) -> None:
-    """Persist all browser session cookies to .instagram_cookies.json and cookies.json."""
+def _save_cookies(driver: webdriver.Chrome, username: str | None = None) -> None:
+    """Persist all browser session cookies to primary and alternate cookie files."""
     try:
         cookies = driver.get_cookies()
         if not cookies:
@@ -267,24 +301,26 @@ def _save_cookies(driver: webdriver.Chrome) -> None:
 
         has_session = any(c.get("name") in ("sessionid", "ds_user_id") for c in cookies)
         serialized = json.dumps(cookies, indent=2, ensure_ascii=False)
-        COOKIES_FILE.write_text(serialized, encoding="utf-8")
+        primary_file, alt_file = get_cookies_file(username)
+        primary_file.write_text(serialized, encoding="utf-8")
         try:
-            ALT_COOKIES_FILE.write_text(serialized, encoding="utf-8")
+            alt_file.write_text(serialized, encoding="utf-8")
         except Exception:
             pass
         logging.info("Session cookies successfully saved to %s & %s (%d cookies, sessionid=%s)",
-                     COOKIES_FILE.name, ALT_COOKIES_FILE.name, len(cookies), "active" if has_session else "pending")
+                     primary_file.name, alt_file.name, len(cookies), "active" if has_session else "pending")
     except Exception as exc:
         logging.warning("Failed to save cookies: %s", exc)
 
 
-def _load_cookies(driver: webdriver.Chrome) -> bool:
+def _load_cookies(driver: webdriver.Chrome, username: str | None = None) -> bool:
     """Restore saved session cookies and verify login state."""
+    primary_file, alt_file = get_cookies_file(username)
     target_file = None
-    if COOKIES_FILE.exists():
-        target_file = COOKIES_FILE
-    elif ALT_COOKIES_FILE.exists():
-        target_file = ALT_COOKIES_FILE
+    if primary_file.exists():
+        target_file = primary_file
+    elif alt_file.exists():
+        target_file = alt_file
 
     if not target_file:
         return False
@@ -343,7 +379,7 @@ def _load_cookies(driver: webdriver.Chrome) -> bool:
 
         if _is_logged_in(driver):
             logging.info("Session restored successfully from cookies — auto-login active.")
-            _save_cookies(driver)  # refresh saved cookies
+            _save_cookies(driver, username=username)  # refresh saved cookies
             return True
 
         logging.warning("Saved cookies expired or rejected by Instagram — fresh login required.")
@@ -378,7 +414,7 @@ def _detect_otp_challenge(driver: webdriver.Chrome) -> bool:
     return False
 
 
-def _wait_for_otp(driver: webdriver.Chrome, timeout: int = 180) -> bool:
+def _wait_for_otp(driver: webdriver.Chrome, timeout: int = 180, username: str | None = None) -> bool:
     """Show OTP prompt and wait for user to enter code in the open Chrome browser."""
     logging.info("HUMAN VERIFICATION / OTP REQUIRED: Instagram is asking for verification. Please complete it in the Chrome browser window (waiting up to %ds)...", timeout)
     waited = 0
@@ -393,7 +429,7 @@ def _wait_for_otp(driver: webdriver.Chrome, timeout: int = 180) -> bool:
         if _is_logged_in(driver):
             pause(2)
             _dismiss_dialogs(driver)
-            _save_cookies(driver)
+            _save_cookies(driver, username=username)
             logging.info("Human verification confirmed! Login successful and session cookies saved.")
             return True
 
@@ -402,7 +438,7 @@ def _wait_for_otp(driver: webdriver.Chrome, timeout: int = 180) -> bool:
             if _is_logged_in(driver):
                 pause(2)
                 _dismiss_dialogs(driver)
-                _save_cookies(driver)
+                _save_cookies(driver, username=username)
                 logging.info("Human verification confirmed! Login successful and session cookies saved.")
                 return True
 
@@ -410,7 +446,7 @@ def _wait_for_otp(driver: webdriver.Chrome, timeout: int = 180) -> bool:
     return False
 
 
-def _wait_for_manual_login(driver: webdriver.Chrome, timeout: int = 180) -> bool:
+def _wait_for_manual_login(driver: webdriver.Chrome, timeout: int = 180, username: str | None = None) -> bool:
     """Fallback: ask user to complete login / verification manually in the open Chrome window."""
     logging.info("MANUAL VERIFICATION REQUIRED: Please complete login/checkpoint in the open Chrome browser window (waiting up to %ds)...", timeout)
     waited = 0
@@ -425,7 +461,7 @@ def _wait_for_manual_login(driver: webdriver.Chrome, timeout: int = 180) -> bool
         if _is_logged_in(driver):
             pause(2)
             _dismiss_dialogs(driver)
-            _save_cookies(driver)
+            _save_cookies(driver, username=username)
             logging.info("Manual login confirmed in Chrome browser! Session established and session cookies saved.")
             return True
 
@@ -462,7 +498,7 @@ def _execute_login_flow(driver: webdriver.Chrome, username: str, password: str) 
 
         if not user_input:
             logging.warning("Could not find username field — falling back to manual login")
-            return _wait_for_manual_login(driver)
+            return _wait_for_manual_login(driver, username=username)
 
         # Try multiple selectors for password
         pass_input = None
@@ -483,7 +519,7 @@ def _execute_login_flow(driver: webdriver.Chrome, username: str, password: str) 
 
         if not pass_input:
             logging.warning("Could not find password field — falling back to manual login")
-            return _wait_for_manual_login(driver)
+            return _wait_for_manual_login(driver, username=username)
 
         # Type credentials slowly, like a human
         logging.info("Typing username…")
@@ -508,8 +544,8 @@ def _execute_login_flow(driver: webdriver.Chrome, username: str, password: str) 
         # Check for OTP/2FA challenge
         if _detect_otp_challenge(driver):
             logging.info("OTP/2FA challenge detected")
-            if not _wait_for_otp(driver):
-                return _wait_for_manual_login(driver)
+            if not _wait_for_otp(driver, username=username):
+                return _wait_for_manual_login(driver, username=username)
             return True
         elif not _is_logged_in(driver):
             # Maybe a different challenge or slow load — wait a bit more
@@ -518,12 +554,12 @@ def _execute_login_flow(driver: webdriver.Chrome, username: str, password: str) 
 
             if _detect_otp_challenge(driver):
                 logging.info("OTP/2FA challenge detected (delayed)")
-                if not _wait_for_otp(driver):
-                    return _wait_for_manual_login(driver)
+                if not _wait_for_otp(driver, username=username):
+                    return _wait_for_manual_login(driver, username=username)
                 return True
             elif not _is_logged_in(driver):
                 logging.warning("Auto-login didn't complete — trying manual login")
-                return _wait_for_manual_login(driver)
+                return _wait_for_manual_login(driver, username=username)
 
         # Dismiss post-login popups
         _dismiss_dialogs(driver)
@@ -533,7 +569,7 @@ def _execute_login_flow(driver: webdriver.Chrome, username: str, password: str) 
             return True
 
         # Last resort
-        return _wait_for_manual_login(driver)
+        return _wait_for_manual_login(driver, username=username)
 
     except (TimeoutException, WebDriverException) as exc:
         logging.warning("Auto-login error: %s", exc)
@@ -544,14 +580,14 @@ def _execute_login_flow(driver: webdriver.Chrome, username: str, password: str) 
         except Exception:
             pass
         # Fall back to manual login
-        return _wait_for_manual_login(driver)
+        return _wait_for_manual_login(driver, username=username)
 
 
 def login_instagram(driver: webdriver.Chrome, username: str, password: str) -> bool:
     """3-step login: cookies → auto login with slow typing → OTP wait → manual fallback."""
-    # Step 0: Try saved cookies
-    if _load_cookies(driver):
-        logging.info("✅ Restored existing Instagram session from cookies")
+    # Step 0: Try saved cookies for this username
+    if _load_cookies(driver, username=username):
+        logging.info("✅ Restored existing Instagram session from cookies for @%s", username)
         return True
 
     # Step 1: Automatic login with OTP and manual fallback
@@ -559,7 +595,7 @@ def login_instagram(driver: webdriver.Chrome, username: str, password: str) -> b
     if success or _is_logged_in(driver):
         pause(2)
         _dismiss_dialogs(driver)
-        _save_cookies(driver)
+        _save_cookies(driver, username=username)
         logging.info("✅ Logged in as @%s — session saved for subsequent runs", username)
         return True
 

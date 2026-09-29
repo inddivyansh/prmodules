@@ -1,0 +1,7 @@
+# Instagram Accounts List for Multi-ID Rotation
+# Format: username:password (one per line)
+# Lines starting with # or empty lines are ignored.
+#
+# Example:
+# army_supporter_01:YourPasswordHere123!
+# army_supporter_02:AnotherPasswordHere456!

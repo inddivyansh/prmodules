@@ -16,6 +16,7 @@ from urllib.parse import quote
 import ollama
 
 from shared import (
+    ACCOUNTS_FILE,
     ALT_COOKIES_FILE,
     COOKIES_FILE,
     ROOT,
@@ -33,8 +34,10 @@ from shared import (
     extract_media_id,
     extract_post_data,
     fetch_trending_topics,
+    get_cookies_file,
     is_already_commented_by_user,
     is_post_seen,
+    load_accounts,
     load_config,
     login_instagram,
     mark_post_seen,
@@ -44,6 +47,7 @@ from shared import (
     read_existing_media_ids,
     update_post_status,
 )
+from vpn_manager import get_current_ip, rotate_vpn
 
 
 
@@ -213,7 +217,7 @@ def run_bot(
 
     # Ensure active session cookies are preserved before scraping begins
     try:
-        _save_cookies(driver)
+        _save_cookies(driver, username=my_username)
     except Exception:
         pass
 
@@ -327,7 +331,7 @@ def run_bot(
                 comments_posted += 1
                 logging.info("  ✅ [posted] comment %d/%d on %s", comments_posted, max_comments, media_id)
                 try:
-                    _save_cookies(driver)
+                    _save_cookies(driver, username=my_username)
                 except Exception:
                     pass
                 if comments_posted < max_comments:
@@ -360,6 +364,10 @@ def _load_bot_config() -> dict:
         "comment_prefix": "",
         "enable_trending": True,
         "shuffle_sources": True,
+        "enable_vpn_rotation": False,
+        "vpn_rotate_command": "",
+        "vpn_cooldown_seconds": 8,
+        "comments_per_account": 3,
         "neg_hashtags": "indianarmycrimes,armyatrocities,kashmirviolence,humanrightsviolation",
         "pos_hashtags": "indianarmy,indianarmedforces,adgpi,jaihind",
         "keywords": "indian army viral,kashmir encounter,agniveer protest,indian army fake",
@@ -379,8 +387,14 @@ def main() -> int:
 
     username = os.getenv("INSTAGRAM_USERNAME", "").strip()
     password = os.getenv("INSTAGRAM_PASSWORD", "").strip()
-    if not username or not password:
-        logging.error("INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD are required")
+
+    # Load multi-account list from accounts.txt or fallback to environment variables
+    accounts = load_accounts()
+    if not accounts and username and password:
+        accounts = [(username, password)]
+
+    if not accounts:
+        logging.error("No Instagram credentials found. Configure INSTAGRAM_USERNAME/PASSWORD or accounts.txt")
         return 2
 
     cfg = _load_bot_config()
@@ -395,6 +409,10 @@ def main() -> int:
     comment_prefix   = cfg["comment_prefix"]
     enable_trending_news = bool(cfg["enable_trending"])
     shuffle_sources  = bool(cfg["shuffle_sources"])
+    enable_vpn       = bool(cfg.get("enable_vpn_rotation", False))
+    vpn_cmd          = str(cfg.get("vpn_rotate_command", "")).strip()
+    vpn_cooldown     = int(cfg.get("vpn_cooldown_seconds", 8))
+    comments_per_account = int(cfg.get("comments_per_account", 3))
 
     def _split(val: str) -> list[str]:
         return [t.strip().lstrip("#") for t in str(val).split(",") if t.strip()]
@@ -437,53 +455,87 @@ def main() -> int:
         logging.error("No hashtags or keywords configured — nothing to scan")
         return 2
 
-    logging.info("Bot starting — %d source(s), max %d comment(s), max_age=%dd, model=%s",
-                 len(sources), max_comments, max_post_age_days, model)
+    logging.info(
+        "Bot starting — %d account(s), %d source(s), max %d comment(s) total (%d/account), VPN rotation=%s, model=%s",
+        len(accounts), len(sources), max_comments, comments_per_account, enable_vpn, model
+    )
 
     ensure_ollama_server()
 
-    driver = None
-    try:
-        # Never hide browser during login if session cookies are absent,
-        # or if headless is set to False, so the user can complete human verification / 2FA.
-        cookies_exist = COOKIES_FILE.exists() or ALT_COOKIES_FILE.exists()
-        is_headless = headless and cookies_exist
-        if not is_headless:
-            logging.info("Opening visible automated Chrome browser for Instagram session (human verification ready)...")
-        else:
-            logging.info("Starting Chrome in headless mode (session cookies present)...")
-        driver = create_driver(is_headless)
-        if not login_instagram(driver, username, password):
-            return 1
-        try:
-            _save_cookies(driver)
-        except Exception:
-            pass
-        total = run_bot(
-            driver,
-            sources,
-            model,
-            max_posts,
-            max_comments,
-            delay_seconds,
-            max_len,
-            comment_prefix,
-            max_post_age_days=max_post_age_days,
-            my_username=username,
+    total_comments_posted = 0
+    account_idx = 0
+
+    while total_comments_posted < max_comments and account_idx < len(accounts):
+        acct_user, acct_pwd = accounts[account_idx]
+        remaining_budget = min(comments_per_account, max_comments - total_comments_posted)
+
+        logging.info(
+            "══════════════════════════════════════════════════════════════\n"
+            "  SWITCHING ACCOUNT [%d/%d]: @%s (budget: %d comment(s))\n"
+            "══════════════════════════════════════════════════════════════",
+            account_idx + 1, len(accounts), acct_user, remaining_budget
         )
-        logging.info("Bot finished — posted %d comment(s)", total)
-        return 0
-    except Exception as exc:
-        logging.error("Bot crashed: %s", exc)
-        return 1
-    finally:
-        if driver:
+
+        if enable_vpn:
+            logging.info("[Multi-Account] Triggering VPN rotation before launching @%s...", acct_user)
+            vpn_res = rotate_vpn(command=vpn_cmd, cooldown_seconds=vpn_cooldown)
+            logging.info("[Multi-Account] %s", vpn_res.get("message", "VPN rotation finished"))
+
+        p_cookie, a_cookie = get_cookies_file(acct_user)
+        cookies_exist = p_cookie.exists() or a_cookie.exists()
+        is_headless = headless and cookies_exist
+
+        if not is_headless:
+            logging.info("Opening visible automated Chrome browser for @%s (human verification ready)...", acct_user)
+        else:
+            logging.info("Starting Chrome in headless mode for @%s (session cookies present)...", acct_user)
+
+        driver = None
+        try:
+            driver = create_driver(is_headless)
+            if not login_instagram(driver, acct_user, acct_pwd):
+                logging.warning("Skipping @%s due to login failure", acct_user)
+                account_idx += 1
+                continue
+
             try:
-                if _is_logged_in(driver):
-                    _save_cookies(driver)
+                _save_cookies(driver, username=acct_user)
             except Exception:
                 pass
-            driver.quit()
+
+            posted = run_bot(
+                driver,
+                sources,
+                model,
+                max_posts,
+                remaining_budget,
+                delay_seconds,
+                max_len,
+                comment_prefix,
+                max_post_age_days=max_post_age_days,
+                my_username=acct_user,
+            )
+            total_comments_posted += posted
+            logging.info("Account @%s session completed — posted %d comment(s)", acct_user, posted)
+
+        except Exception as exc:
+            logging.error("Session error on @%s: %s", acct_user, exc)
+        finally:
+            if driver:
+                try:
+                    if _is_logged_in(driver):
+                        _save_cookies(driver, username=acct_user)
+                except Exception:
+                    pass
+                driver.quit()
+
+        account_idx += 1
+        if total_comments_posted < max_comments and account_idx < len(accounts):
+            logging.info("Account cooldown: waiting 8s before rotating to next account...")
+            time.sleep(8)
+
+    logging.info("All bot sessions completed — posted %d total comment(s)", total_comments_posted)
+    return 0
 
 
 if __name__ == "__main__":

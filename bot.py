@@ -16,6 +16,8 @@ from urllib.parse import quote
 import ollama
 
 from shared import (
+    COOKIES_FILE,
+    ROOT,
     NegativePost,
     ResponseRecord,
     append_negative_post,
@@ -39,6 +41,7 @@ from shared import (
     read_existing_media_ids,
     update_post_status,
 )
+
 
 
 # ---------------------------------------------------------------------------

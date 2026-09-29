@@ -308,41 +308,73 @@ def _cookie_status() -> tuple[bool, str]:
     return False, "No saved session cookies — browser login required on first run"
 
 
+# Module-level singleton process handle across Streamlit reruns
+if "_BOT_PROCESS_SINGLETON" not in globals():
+    _BOT_PROCESS_SINGLETON = None
+
+
+def _get_python_executable() -> str:
+    """Find the best Python executable with required dependencies."""
+    venv_py = ROOT / ".venv" / "Scripts" / "python.exe"
+    if venv_py.exists():
+        return str(venv_py)
+    venv_py_posix = ROOT / ".venv" / "bin" / "python"
+    if venv_py_posix.exists():
+        return str(venv_py_posix)
+    return sys.executable
+
+
 def _bot_alive() -> bool:
     """Check if the background bot process is currently running."""
-    p = st.session_state.get("bot_process")
+    global _BOT_PROCESS_SINGLETON
+    p = st.session_state.get("bot_process") or _BOT_PROCESS_SINGLETON
     if p is None:
         return False
     if p.poll() is not None:
+        _BOT_PROCESS_SINGLETON = None
         st.session_state.bot_running = False
         st.session_state.bot_process = None
         return False
+    _BOT_PROCESS_SINGLETON = p
+    st.session_state.bot_running = True
+    st.session_state.bot_process = p
     return True
 
 
 def _launch_bot() -> None:
-    """Spawn the bot process in the background."""
+    """Spawn the bot process in the background using the project virtualenv."""
+    global _BOT_PROCESS_SINGLETON
+    py_bin = _get_python_executable()
+    log_path = ROOT / "monitor.log"
+    log_f = open(log_path, "a", encoding="utf-8")
+    log_f.write(f"\n{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S,%f')[:-3]} INFO Launching bot engine ({py_bin})\n")
+    log_f.flush()
+
     p = subprocess.Popen(
-        [sys.executable, str(ROOT / "bot.py")],
+        [py_bin, str(ROOT / "bot.py")],
         cwd=str(ROOT),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log_f,
+        stderr=subprocess.STDOUT,
     )
+    _BOT_PROCESS_SINGLETON = p
     st.session_state.bot_process = p
     st.session_state.bot_running = True
 
 
 def _stop_bot() -> None:
     """Terminate the active bot process."""
-    p = st.session_state.get("bot_process")
+    global _BOT_PROCESS_SINGLETON
+    p = st.session_state.get("bot_process") or _BOT_PROCESS_SINGLETON
     if p and p.poll() is None:
         p.terminate()
         try:
             p.wait(timeout=5)
         except subprocess.TimeoutExpired:
             p.kill()
+    _BOT_PROCESS_SINGLETON = None
     st.session_state.bot_running = False
     st.session_state.bot_process = None
+
 
 
 def _tail_log(n: int = 80) -> list[str]:

@@ -99,46 +99,81 @@ Reply with ONLY the comment text, nothing else.
 # Ollama helpers
 # ---------------------------------------------------------------------------
 
+def ensure_ollama_server() -> bool:
+    """Check if Ollama server is running; if not, attempt to launch it."""
+    import subprocess
+    import urllib.request
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:11434", timeout=2) as resp:
+            if resp.status == 200:
+                return True
+    except Exception:
+        pass
+    try:
+        logging.info("Ollama is not responding — auto-starting 'ollama serve' in background...")
+        subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(3)
+        with urllib.request.urlopen("http://127.0.0.1:11434", timeout=3) as resp:
+            if resp.status == 200:
+                logging.info("Ollama server connected successfully.")
+                return True
+    except Exception as exc:
+        logging.warning("Could not auto-start Ollama: %s", exc)
+    return False
+
+
 def is_negative_post(caption: str, model: str) -> bool:
     """Ask Ollama whether the caption is negative toward the Indian Army."""
-    try:
-        response = ollama.chat(
-            model=model,
-            messages=[{"role": "user", "content": SENTIMENT_PROMPT.format(caption=caption)}],
-        )
-        answer = response["message"]["content"].strip().upper()
-        result = answer.startswith("YES")
-        logging.info(
-            "Sentiment → %s  (raw: %s)",
-            "NEGATIVE" if result else "not negative",
-            answer[:60],
-        )
-        return result
-    except Exception as exc:
-        logging.warning("Ollama sentiment check failed: %s — skipping", exc)
-        return False
+    for attempt in range(2):
+        try:
+            response = ollama.chat(
+                model=model,
+                messages=[{"role": "user", "content": SENTIMENT_PROMPT.format(caption=caption)}],
+            )
+            answer = response["message"]["content"].strip().upper()
+            result = answer.startswith("YES")
+            logging.info(
+                "Sentiment → %s  (raw: %s)",
+                "NEGATIVE" if result else "not negative",
+                answer[:60],
+            )
+            return result
+        except Exception as exc:
+            if attempt == 0 and "connect" in str(exc).lower():
+                logging.info("Attempting to connect/launch Ollama server...")
+                if ensure_ollama_server():
+                    continue
+            logging.warning("Ollama sentiment check failed: %s — skipping", exc)
+            return False
+    return False
 
 
 def generate_response(caption: str, model: str, max_len: int) -> str | None:
     """Use Ollama to draft a contextual reply."""
-    try:
-        resp = ollama.chat(
-            model=model,
-            messages=[{
-                "role": "user",
-                "content": RESPONSE_PROMPT.format(caption=caption, max_len=max_len),
-            }],
-        )
-        text = resp["message"]["content"].strip().strip('"').strip("'")
-        if not text or len(text) < 10:
-            logging.warning("Ollama returned an unusably short response")
+    for attempt in range(2):
+        try:
+            resp = ollama.chat(
+                model=model,
+                messages=[{
+                    "role": "user",
+                    "content": RESPONSE_PROMPT.format(caption=caption, max_len=max_len),
+                }],
+            )
+            text = resp["message"]["content"].strip().strip('"').strip("'")
+            if not text or len(text) < 10:
+                logging.warning("Ollama returned an unusably short response")
+                return None
+            if len(text) > max_len:
+                text = text[:max_len].rsplit(" ", 1)[0].rstrip(".,;: ") + "."
+            return text
+        except Exception as exc:
+            if attempt == 0 and "connect" in str(exc).lower():
+                if ensure_ollama_server():
+                    continue
+            logging.warning("Ollama response generation failed: %s", exc)
             return None
-        if len(text) > max_len:
-            text = text[:max_len].rsplit(" ", 1)[0].rstrip(".,;: ") + "."
-        return text
-    except Exception as exc:
-        logging.warning("Ollama response generation failed: %s", exc)
-        return None
+    return None
+
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +426,8 @@ def main() -> int:
 
     logging.info("Bot starting — %d source(s), max %d comment(s), max_age=%dd, model=%s",
                  len(sources), max_comments, max_post_age_days, model)
+
+    ensure_ollama_server()
 
     driver = None
     try:

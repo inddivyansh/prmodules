@@ -343,9 +343,34 @@ def _bot_alive() -> bool:
     return True
 
 
+def _ollama_status() -> tuple[bool, str]:
+    """Check if the local Ollama server is responding."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:11434", timeout=1.5) as resp:
+            if resp.status == 200:
+                return True, "Ollama LLM Engine: Online"
+    except Exception:
+        pass
+    return False, "Ollama LLM Engine: Offline"
+
+
+def _ensure_ollama_server() -> bool:
+    """Ensure Ollama server is active in background."""
+    ok, _ = _ollama_status()
+    if ok:
+        return True
+    try:
+        subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+
 def _launch_bot() -> None:
     """Spawn the bot process in the background using the project virtualenv."""
     global _BOT_PROCESS_SINGLETON
+    _ensure_ollama_server()
     py_bin = _get_python_executable()
     log_path = ROOT / "monitor.log"
     log_f = open(log_path, "a", encoding="utf-8")
@@ -461,6 +486,17 @@ with st.sidebar:
                 st.rerun()
             except Exception as e:
                 st.error(str(e))
+
+    st.markdown("---")
+    st.markdown("**LLM ENGINE**")
+    ollama_ok, ollama_msg = _ollama_status()
+    o_badge = "notice-box-ok" if ollama_ok else "notice-box-warn"
+    st.markdown(f'<div class="{o_badge}">{ollama_msg}</div>', unsafe_allow_html=True)
+    if not ollama_ok:
+        if st.button("Start Ollama Service", use_container_width=True, key="btn_sidebar_ollama"):
+            _ensure_ollama_server()
+            st.success("Ollama service started.")
+            st.rerun()
 
     st.markdown("---")
     st.caption(f"Log: monitor.log ({'Active' if (ROOT / 'monitor.log').exists() else 'Empty'})")

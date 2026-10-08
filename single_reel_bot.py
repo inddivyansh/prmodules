@@ -120,6 +120,8 @@ def comment_on_single_reel(
     )
 
     total_posted = 0
+    # Track every comment posted on this reel so the next account gets something unique
+    used_comments: list[str] = []
 
     for idx, (acct_user, acct_pwd) in enumerate(accounts):
         # Safety cooldown check
@@ -194,8 +196,13 @@ def comment_on_single_reel(
                 if not neg:
                     logging.info("  [info] Post not classified as negative -- commenting anyway (single-reel mode)")
 
-            # Generate a unique response per account
-            response_text = generate_response(caption or "[No caption]", model, max_len)
+            # Generate a unique response per account (exclude all prior comments on this reel)
+            response_text = generate_response(
+                caption or "[No caption]",
+                model,
+                max_len,
+                exclude_texts=used_comments,
+            )
             if not response_text:
                 logging.warning("  [skip] response generation failed for @%s", acct_user)
                 record_session_end(acct_user, comments_posted=0, status="failed", error="Response generation failed")
@@ -235,9 +242,11 @@ def comment_on_single_reel(
             if success:
                 posted += 1
                 total_posted += 1
+                # Register comment so the next account generates something distinct
+                used_comments.append(response_text)
                 logging.info(
-                    "  [posted] @%s successfully commented on reel (total posted: %d)",
-                    acct_user, total_posted,
+                    "  [posted] @%s successfully commented on reel (total posted: %d/%d accounts)",
+                    acct_user, total_posted, len(accounts),
                 )
                 try:
                     _save_cookies(driver, username=acct_user)

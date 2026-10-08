@@ -102,10 +102,16 @@ Write a short, respectful, and patriotic comment that:
 - Stays factual and measured — never aggressive or abusive
 - Encourages the reader to verify claims from official sources
 - Is written in the same language as the caption (Hindi, Urdu, or English)
-- Is under {max_len} characters (strict limit)
+- Is under {max_len} characters (strict limit){exclusion_block}
 
 Reply with ONLY the comment text, nothing else.
 """
+
+EXCLUSION_BLOCK = """
+
+IMPORTANT — the following comments have ALREADY been posted on this exact post by other accounts.
+Your comment MUST be completely different in wording, structure, and phrasing. Do NOT reuse any sentence, phrase, or idea from these:
+{prior_comments}"""
 
 
 # ---------------------------------------------------------------------------
@@ -161,30 +167,80 @@ def is_negative_post(caption: str, model: str) -> bool:
     return False
 
 
-def generate_response(caption: str, model: str, max_len: int) -> str | None:
-    """Use Ollama to draft a contextual reply."""
-    for attempt in range(2):
+def _similarity_ratio(a: str, b: str) -> float:
+    """Rough word-overlap ratio between two strings (0.0 – 1.0)."""
+    wa = set(a.lower().split())
+    wb = set(b.lower().split())
+    if not wa or not wb:
+        return 0.0
+    return len(wa & wb) / max(len(wa), len(wb))
+
+
+def generate_response(
+    caption: str,
+    model: str,
+    max_len: int,
+    exclude_texts: list[str] | None = None,
+    max_uniqueness_attempts: int = 5,
+) -> str | None:
+    """Use Ollama to draft a contextual reply.
+
+    If *exclude_texts* is provided the prompt explicitly lists previously
+    used comments and the result is checked for similarity; generation is
+    retried up to *max_uniqueness_attempts* times until a sufficiently
+    different candidate is found.
+    """
+    exclude_texts = [t for t in (exclude_texts or []) if t]
+
+    # Build the exclusion block once for this call
+    if exclude_texts:
+        prior = "\n".join(f"  - {t}" for t in exclude_texts)
+        exclusion_block = EXCLUSION_BLOCK.format(prior_comments=prior)
+    else:
+        exclusion_block = ""
+
+    prompt = RESPONSE_PROMPT.format(
+        caption=caption,
+        max_len=max_len,
+        exclusion_block=exclusion_block,
+    )
+
+    last_exc = None
+    for attempt in range(max_uniqueness_attempts):
         try:
             resp = ollama.chat(
                 model=model,
-                messages=[{
-                    "role": "user",
-                    "content": RESPONSE_PROMPT.format(caption=caption, max_len=max_len),
-                }],
+                messages=[{"role": "user", "content": prompt}],
+                options={"temperature": 0.85 + attempt * 0.05},  # raise temp on retries
             )
             text = resp["message"]["content"].strip().strip('"').strip("'")
             if not text or len(text) < 10:
-                logging.warning("Ollama returned an unusably short response")
-                return None
+                logging.warning("Ollama returned an unusably short response (attempt %d)", attempt + 1)
+                continue
             if len(text) > max_len:
                 text = text[:max_len].rsplit(" ", 1)[0].rstrip(".,;: ") + "."
+
+            # Uniqueness check — reject if too similar to any prior comment
+            if exclude_texts:
+                max_sim = max(_similarity_ratio(text, ex) for ex in exclude_texts)
+                if max_sim > 0.55:
+                    logging.info(
+                        "  [unique] Generated comment too similar to a prior one (%.0f%% overlap) — retrying (attempt %d/%d)",
+                        max_sim * 100, attempt + 1, max_uniqueness_attempts,
+                    )
+                    continue
+
             return text
+
         except Exception as exc:
+            last_exc = exc
             if attempt == 0 and "connect" in str(exc).lower():
                 if ensure_ollama_server():
                     continue
-            logging.warning("Ollama response generation failed: %s", exc)
-            return None
+            logging.warning("Ollama response generation failed (attempt %d): %s", attempt + 1, exc)
+
+    if last_exc:
+        logging.warning("generate_response gave up after %d attempts: %s", max_uniqueness_attempts, last_exc)
     return None
 
 
@@ -216,10 +272,18 @@ def run_bot(
     comment_prefix: str,
     max_post_age_days: int = 14,
     my_username: str = "",
+    session_comments: dict[str, list[str]] | None = None,
 ) -> int:
-    """Scan sources, detect negatives, generate reply, post comment — with deduplication & trending filters."""
+    """Scan sources, detect negatives, generate reply, post comment — with deduplication & trending filters.
+
+    *session_comments* is a shared dict  {media_id: [comment_text, ...]}  that
+    accumulates every successfully posted comment across all accounts in the
+    session, so each new account gets a prompt that excludes prior ones.
+    """
     existing_ids = read_existing_media_ids()
     comments_posted = 0
+    if session_comments is None:
+        session_comments = {}
 
     # Ensure active session cookies are preserved before scraping begins
     try:
@@ -283,8 +347,9 @@ def run_bot(
             age_display = f"{age_days:.1f}d" if age_days is not None else "unknown"
             logging.info("  [NEGATIVE] %s by @%s (age: %s)", media_id, post["username"], age_display)
 
-            # Step 5: Generate response
-            response_text = generate_response(caption, model, max_len)
+            # Step 5: Generate response (exclude any comments already posted on this post)
+            prior_on_this_post = session_comments.get(media_id, [])
+            response_text = generate_response(caption, model, max_len, exclude_texts=prior_on_this_post)
             if not response_text:
                 logging.info("  [skip] could not generate response for %s", media_id)
                 append_negative_post(NegativePost(
@@ -335,7 +400,9 @@ def run_bot(
 
             if success:
                 comments_posted += 1
-                logging.info("  ✅ [posted] comment %d/%d on %s", comments_posted, max_comments, media_id)
+                # Record this comment so subsequent accounts generate something different
+                session_comments.setdefault(media_id, []).append(response_text)
+                logging.info("  [posted] comment %d/%d on %s", comments_posted, max_comments, media_id)
                 try:
                     _save_cookies(driver, username=my_username)
                 except Exception:
@@ -345,7 +412,7 @@ def run_bot(
                     logging.info("  waiting %.0fs before next action…", delay)
                     time.sleep(delay)
             else:
-                logging.warning("  ❌ [failed] could not comment on %s", media_id)
+                logging.warning("  [failed] could not comment on %s", media_id)
 
     return comments_posted
 
@@ -471,6 +538,8 @@ def main() -> int:
 
     total_comments_posted = 0
     account_idx = 0
+    # Shared across all account sessions: {media_id: [comment_text, ...]} to enforce uniqueness
+    session_comments: dict[str, list[str]] = {}
 
     while total_comments_posted < max_comments and account_idx < len(accounts):
         acct_user, acct_pwd = accounts[account_idx]
@@ -541,6 +610,7 @@ def main() -> int:
                 comment_prefix,
                 max_post_age_days=max_post_age_days,
                 my_username=acct_user,
+                session_comments=session_comments,  # share across accounts for uniqueness
             )
             total_comments_posted += posted
             record_session_end(acct_user, comments_posted=posted, status="cooling" if posted > 0 else "ready")

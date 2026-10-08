@@ -293,6 +293,10 @@ if "initialized" not in st.session_state:
     st.session_state.clusters = []
     st.session_state.trending_topics = []
     st.session_state.raw_input = ""
+    # Single-Reel Mode state
+    st.session_state.single_reel_url = ""
+    st.session_state.single_reel_process = None
+    st.session_state.single_reel_running = False
     st.session_state.initialized = True
 
 
@@ -531,8 +535,9 @@ with st.sidebar:
 st.markdown("## Indian Army &mdash; PR Command Center")
 st.caption("Autonomous Sentiment Monitoring &bull; RAG Fact-Check Verification &bull; Counter-Narrative Publishing &bull; Situation Reporting")
 
-tab_bot, tab_triage, tab_kb, tab_sitrep = st.tabs([
+tab_bot, tab_single_reel, tab_triage, tab_kb, tab_sitrep = st.tabs([
     "Bot Operations",
+    "Single Reel Mode",
     "Manual Triage",
     "Knowledge Base",
     "Situation Report",
@@ -1231,3 +1236,248 @@ with tab_sitrep:
         )
         st.markdown("---")
         st.markdown(sitrep_doc)
+
+
+# ===========================================================================
+# TAB 2 (NEW): SINGLE REEL MODE
+# ===========================================================================
+
+# Module-level singleton for the single-reel process
+if "_SINGLE_REEL_PROCESS_SINGLETON" not in globals():
+    _SINGLE_REEL_PROCESS_SINGLETON = None
+
+
+def _single_reel_alive() -> bool:
+    """Check if the single-reel bot process is currently running."""
+    global _SINGLE_REEL_PROCESS_SINGLETON
+    p = st.session_state.get("single_reel_process") or _SINGLE_REEL_PROCESS_SINGLETON
+    if p is None:
+        return False
+    if p.poll() is not None:
+        _SINGLE_REEL_PROCESS_SINGLETON = None
+        st.session_state.single_reel_running = False
+        st.session_state.single_reel_process = None
+        return False
+    _SINGLE_REEL_PROCESS_SINGLETON = p
+    st.session_state.single_reel_running = True
+    st.session_state.single_reel_process = p
+    return True
+
+
+def _launch_single_reel(reel_url: str, cfg_patch: dict) -> None:
+    """Persist the reel URL into bot_config.json then spawn single_reel_bot.py."""
+    global _SINGLE_REEL_PROCESS_SINGLETON
+    _ensure_ollama_server()
+
+    # Patch config with single_reel_url before spawning
+    full_cfg = _load_persisted_config()
+    full_cfg.update(cfg_patch)
+    full_cfg["single_reel_url"] = reel_url
+    _save_config_file(full_cfg)
+
+    py_bin = _get_python_executable()
+    log_path = ROOT / "monitor.log"
+    log_f = open(log_path, "a", encoding="utf-8")
+    log_f.write(
+        f"\n{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S,%f')[:-3]} INFO "
+        f"[SINGLE-REEL] Launching single_reel_bot for: {reel_url}\n"
+    )
+    log_f.flush()
+
+    p = subprocess.Popen(
+        [py_bin, str(ROOT / "single_reel_bot.py")],
+        cwd=str(ROOT),
+        stdout=log_f,
+        stderr=subprocess.STDOUT,
+    )
+    _SINGLE_REEL_PROCESS_SINGLETON = p
+    st.session_state.single_reel_process = p
+    st.session_state.single_reel_running = True
+
+
+def _stop_single_reel() -> None:
+    """Terminate the single-reel bot process."""
+    global _SINGLE_REEL_PROCESS_SINGLETON
+    p = st.session_state.get("single_reel_process") or _SINGLE_REEL_PROCESS_SINGLETON
+    if p and p.poll() is None:
+        p.terminate()
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+    _SINGLE_REEL_PROCESS_SINGLETON = None
+    st.session_state.single_reel_running = False
+    st.session_state.single_reel_process = None
+
+
+with tab_single_reel:
+    st.subheader("Single Reel Mode")
+    st.caption(
+        "Target a specific Instagram reel or post. The bot will log in with every configured account "
+        "and post a uniquely-generated counter-comment from each one."
+    )
+
+    sr_alive = _single_reel_alive()
+
+    with st.container(border=True):
+        st.markdown("#### Target Reel")
+
+        sr_url = st.text_input(
+            "Instagram Reel / Post URL",
+            value=st.session_state.get("single_reel_url", ""),
+            placeholder="https://www.instagram.com/reel/XXXXXXXXXX/",
+            key="sr_url_input",
+            disabled=sr_alive,
+            help="Paste the full URL of the reel or post you want to comment on.",
+        )
+
+        st.markdown("---")
+        st.markdown("#### Session Options")
+
+        sr_col1, sr_col2 = st.columns(2)
+        with sr_col1:
+            sr_skip_neg = st.checkbox(
+                "Skip negative-sentiment check (comment regardless of content)",
+                value=True,
+                key="sr_skip_neg",
+                disabled=sr_alive,
+                help="When checked, the bot will comment on the reel even if the AI doesn't classify it as anti-army.",
+            )
+            sr_headless = st.checkbox(
+                "Headless Browser (Hidden)",
+                value=st.session_state.headless,
+                key="sr_headless",
+                disabled=sr_alive,
+            )
+        with sr_col2:
+            sr_delay = st.slider(
+                "Inter-Account Delay (seconds)",
+                min_value=30,
+                max_value=600,
+                value=st.session_state.delay_seconds,
+                step=10,
+                key="sr_delay",
+                disabled=sr_alive,
+                help="Pause between consecutive accounts to avoid rate-limiting.",
+            )
+            sr_prefix = st.text_input(
+                "Comment Prefix (optional)",
+                value=st.session_state.comment_prefix,
+                placeholder="e.g. [Indian Army Fact-Check Response]",
+                key="sr_prefix",
+                disabled=sr_alive,
+            )
+
+        # Show which accounts will be used
+        raw_accts = ACCOUNTS_FILE.read_text(encoding="utf-8") if ACCOUNTS_FILE.exists() else ""
+        parsed_sr_accts = [
+            line.strip().split(":", 1)
+            for line in raw_accts.splitlines()
+            if line.strip() and not line.strip().startswith("#") and ":" in line
+        ]
+        env_sr_user = st.session_state.ig_username
+        all_sr_accts = [u.strip() for u, _ in parsed_sr_accts]
+        if env_sr_user and env_sr_user not in all_sr_accts:
+            all_sr_accts.insert(0, env_sr_user)
+
+        if all_sr_accts:
+            st.markdown("---")
+            st.markdown(f"**Accounts that will comment** ({len(all_sr_accts)} total):")
+            st.write("  ".join(f"`@{a}`" for a in all_sr_accts))
+        else:
+            st.warning("No accounts configured. Add credentials above or in accounts.txt.")
+
+    # -----------------------------------------------------------------------
+    # Launch / Stop controls
+    # -----------------------------------------------------------------------
+    st.markdown("---")
+    sr_btn_col1, sr_btn_col2, sr_btn_col3 = st.columns([2, 1, 1])
+
+    with sr_btn_col1:
+        if not sr_alive:
+            if st.button("Launch Single-Reel Session", type="primary", width="stretch", key="sr_launch"):
+                url_val = sr_url.strip()
+                if not url_val:
+                    st.error("Paste a valid Instagram reel URL before launching.")
+                elif not all_sr_accts:
+                    st.error("No accounts configured. Add credentials in Bot Operations > Authentication.")
+                else:
+                    st.session_state.single_reel_url = url_val
+                    cfg_patch = {
+                        "single_reel_url": url_val,
+                        "single_reel_skip_negative_check": sr_skip_neg,
+                        "headless": sr_headless,
+                        "delay_seconds": sr_delay,
+                        "comment_prefix": sr_prefix.strip(),
+                        "model": st.session_state.ollama_model,
+                    }
+                    _launch_single_reel(url_val, cfg_patch)
+                    st.success(
+                        f"Single-Reel bot launched (PID: {st.session_state.single_reel_process.pid}). "
+                        f"Targeting {len(all_sr_accts)} account(s)."
+                    )
+                    st.rerun()
+        else:
+            if st.button("Stop Single-Reel Session", type="secondary", width="stretch", key="sr_stop"):
+                _stop_single_reel()
+                st.warning("Single-Reel session terminated by operator.")
+                st.rerun()
+
+    with sr_btn_col2:
+        pid_display = (
+            st.session_state.single_reel_process.pid
+            if st.session_state.get("single_reel_process")
+            else "—"
+        )
+        if sr_alive:
+            st.markdown(f'<span class="status-pill-running">ACTIVE &bull; PID {pid_display}</span>', unsafe_allow_html=True)
+        else:
+            st.markdown('<span class="status-pill-idle">IDLE</span>', unsafe_allow_html=True)
+
+    with sr_btn_col3:
+        if st.button("Refresh", width="stretch", key="sr_refresh"):
+            st.rerun()
+
+    # -----------------------------------------------------------------------
+    # Live log feed (auto-updates every 2 s)
+    # -----------------------------------------------------------------------
+    @st.fragment(run_every=2)
+    def _render_single_reel_log() -> None:
+        st.markdown("---")
+        sr_h1, sr_h2 = st.columns([3, 1])
+        with sr_h1:
+            st.markdown("#### Live Activity Feed — Single Reel")
+        with sr_h2:
+            if _single_reel_alive():
+                st.markdown('<span class="status-pill-running">LIVE &bull; 2S</span>', unsafe_allow_html=True)
+            else:
+                st.markdown('<span class="status-pill-idle">STANDBY</span>', unsafe_allow_html=True)
+
+        log_lines = _tail_log(80)
+        # Filter to show only single-reel related lines (or all if none)
+        sr_lines = [l for l in log_lines if "SINGLE-REEL" in l or "single_reel" in l.lower() or "[posted]" in l.lower()]
+        display_lines = sr_lines if sr_lines else log_lines
+
+        if display_lines:
+            feed_html = "".join(_log_html(l) for l in reversed(display_lines))
+        else:
+            feed_html = '<div class="log-line-default">No single-reel activity yet. Launch a session above to begin.</div>'
+
+        st.markdown(f'<div class="log-feed">{feed_html}</div>', unsafe_allow_html=True)
+
+        feed_c1, feed_c2 = st.columns([4, 1])
+        with feed_c1:
+            if _single_reel_alive():
+                st.caption("Single-reel bot running. Log updates every 2 seconds.")
+            else:
+                st.caption("Bot idle. Log will stream once a session is active.")
+        with feed_c2:
+            if (ROOT / "monitor.log").exists():
+                if st.button("Clear Log", width="stretch", key="sr_clear_log"):
+                    try:
+                        (ROOT / "monitor.log").write_text("", encoding="utf-8")
+                        st.rerun(scope="fragment")
+                    except Exception as ex:
+                        st.error(str(ex))
+
+    _render_single_reel_log()

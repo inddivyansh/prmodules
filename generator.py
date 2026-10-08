@@ -6,9 +6,7 @@ import ollama
 
 
 GENERATOR_PROMPT = """
-You are drafting a response for an Indian Army public-information review workflow.
-
-The response will be reviewed by a human before publication.
+You are drafting a patriotic response defending the Indian Armed Forces against misleading narratives and propaganda.
 
 Original Instagram post:
 {caption}
@@ -19,24 +17,17 @@ Sentiment: {sentiment}
 Language: {language}
 
 Official government verification:
-
 {verification}
 
-Write ONE concise response in the same language as the original post.
+Write ONE concise, patriotic comment in the same language as the original post.
 
 Requirements:
-
-- Present the official information clearly.
-- Correct a factual claim when official evidence directly contradicts it.
-- Where a claim is supported by an official source, accurately reflect that
-  information.
-- If a claim is UNVERIFIED, do not state that it is false.
-- Do not invent facts, figures, events, quotations, or sources.
-- Do not insult or attack the person who made the post.
-- Keep the response respectful and professional.
-- The response should be suitable for human public-relations review.
-- Prefer concrete official information over generic statements.
-- Keep the response below 300 characters.
+- Stand firmly with the Indian Army ("Indian Army is always in service of the nation and protects all citizens with supreme sacrifice").
+- Do NOT stay neutral: passionately defend the honour, discipline, and integrity of our soldiers.
+- Directly call out fake news, fabricated allegations, and unverified anti-army claims ("This is completely fake news / propaganda, do not fall for baseless rumours").
+- Urge readers to trust only official Armed Forces communications (PIB Defence, ADGPI, MoD).
+- Maintain high patriotic morale and pride in our jawans ("Jai Hind 🇮🇳", "Proud of our Indian Army").
+- Keep the response below 280 characters.
 
 Return ONLY the proposed response text.
 """

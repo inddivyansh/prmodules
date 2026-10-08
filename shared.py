@@ -61,7 +61,17 @@ def get_cookies_file(username: str | None = None) -> tuple[Path, Path]:
     if username:
         clean = re.sub(r"[^a-zA-Z0-9_.-]", "", username.strip().lower())
         if clean:
-            return ROOT / f".cookies_{clean}.json", ROOT / f"cookies_{clean}.json"
+            p = ROOT / f".cookies_{clean}.json"
+            a = ROOT / f"cookies_{clean}.json"
+            if p.exists() or a.exists():
+                return p, a
+            for alt in (COOKIES_FILE, ALT_COOKIES_FILE):
+                if alt.exists():
+                    return p, alt
+            for f in ROOT.glob(".cookies_*.json"):
+                if f.is_file():
+                    return p, f
+            return p, a
     return COOKIES_FILE, ALT_COOKIES_FILE
 
 
@@ -252,15 +262,19 @@ def _is_logged_in(driver: webdriver.Chrome) -> bool:
     """Check multiple indicators that we're logged into Instagram."""
     try:
         current_url = driver.current_url.lower()
-        # If on challenge or login page or username input is present, definitely not logged in
-        if "/challenge" in current_url or "/accounts/login" in current_url:
-            return False
-        if driver.find_elements(By.NAME, "username"):
+        # If explicitly on challenge or checkpoint, not logged in
+        if "/challenge" in current_url:
             return False
 
-        # Check for sessionid cookie (definitive proof of authenticated session)
+        # If on login page without active session cookies, not logged in
         cookies = {c["name"]: c["value"] for c in driver.get_cookies()}
-        if "sessionid" in cookies and len(cookies["sessionid"]) > 5:
+        has_session = ("sessionid" in cookies and len(cookies["sessionid"]) > 5) or ("ds_user_id" in cookies and len(cookies["ds_user_id"]) > 2)
+
+        if "/accounts/login" in current_url and not has_session:
+            return False
+
+        # Definitive proof: sessionid or ds_user_id in active cookies
+        if has_session and "/accounts/login" not in current_url:
             return True
 
         # Check for logged-in UI elements
@@ -270,20 +284,35 @@ def _is_logged_in(driver: webdriver.Chrome) -> bool:
             "//svg[@aria-label='Messages']",
             "//svg[@aria-label='Home']",
             "//svg[@aria-label='New post']",
+            "//svg[@aria-label='Search']",
+            "//svg[@aria-label='Explore']",
+            "//svg[@aria-label='Reels']",
             "//span[@aria-label='Profile']",
             "//img[@data-testid='user-avatar']",
             "//img[contains(@alt, 'profile picture')]",
+            "//a[contains(@href, '/explore/')]",
         ):
             if driver.find_elements(By.XPATH, sel):
                 return True
+
+        # Check window JS state for viewer ID
+        try:
+            viewer_id = driver.execute_script(
+                "return window._sharedData?.config?.viewerId || (document.cookie.indexOf('ds_user_id=') !== -1 ? '1' : '');"
+            )
+            if viewer_id:
+                return True
+        except Exception:
+            pass
+
     except Exception:
         pass
     return False
 
 
 def _dismiss_dialogs(driver: webdriver.Chrome) -> None:
-    """Try to dismiss cookie-consent banners and other overlay dialogs."""
-    for label in (
+    """Dismiss cookie-consent banners, notification prompts, and save-info dialogs."""
+    labels = (
         "Allow all cookies",
         "Allow essential and optional cookies",
         "Accept All",
@@ -295,16 +324,21 @@ def _dismiss_dialogs(driver: webdriver.Chrome) -> None:
         "Save Information",
         "Not Now",
         "Not now",
-    ):
+        "Cancel",
+    )
+    for label in labels:
         try:
             buttons = driver.find_elements(
-                By.XPATH, f"//button[contains(text(), '{label}')]"
+                By.XPATH, f"//button[contains(text(), '{label}')] | //button[contains(., '{label}')] | //div[@role='button' and (text()='{label}' or contains(., '{label}'))]"
             )
-            if buttons:
-                buttons[0].click()
-                logging.info("Dismissed dialog: '%s'", label)
-                pause(2)
-                return
+            for btn in buttons:
+                if btn.is_displayed():
+                    try:
+                        btn.click()
+                        logging.info("Dismissed dialog: '%s'", label)
+                        pause(1.0)
+                    except Exception:
+                        pass
         except WebDriverException:
             continue
 
@@ -317,7 +351,7 @@ def _human_type(element, text: str) -> None:
 
 
 def _save_cookies(driver: webdriver.Chrome, username: str | None = None) -> None:
-    """Persist all browser session cookies to primary and alternate cookie files."""
+    """Persist all browser session cookies to primary, alternate, and root cookie files."""
     try:
         cookies = driver.get_cookies()
         if not cookies:
@@ -332,6 +366,13 @@ def _save_cookies(driver: webdriver.Chrome, username: str | None = None) -> None
             alt_file.write_text(serialized, encoding="utf-8")
         except Exception:
             pass
+        # Always write root fallback cookies as well
+        try:
+            COOKIES_FILE.write_text(serialized, encoding="utf-8")
+            ALT_COOKIES_FILE.write_text(serialized, encoding="utf-8")
+        except Exception:
+            pass
+
         logging.info("Session cookies successfully saved to %s & %s (%d cookies, sessionid=%s)",
                      primary_file.name, alt_file.name, len(cookies), "active" if has_session else "pending")
     except Exception as exc:
@@ -339,16 +380,27 @@ def _save_cookies(driver: webdriver.Chrome, username: str | None = None) -> None
 
 
 def _load_cookies(driver: webdriver.Chrome, username: str | None = None) -> bool:
-    """Restore saved session cookies and verify login state."""
+    """Restore saved session cookies with CDP and add_cookie fallback, verifying login state."""
     primary_file, alt_file = get_cookies_file(username)
     target_file = None
     if primary_file.exists():
         target_file = primary_file
     elif alt_file.exists():
         target_file = alt_file
+    else:
+        for f in (COOKIES_FILE, ALT_COOKIES_FILE):
+            if f.exists():
+                target_file = f
+                break
+        if not target_file:
+            for f in ROOT.glob(".cookies_*.json"):
+                if f.is_file():
+                    target_file = f
+                    break
 
     if not target_file:
         return False
+
     try:
         raw = target_file.read_text(encoding="utf-8")
         cookies = json.loads(raw)
@@ -356,56 +408,94 @@ def _load_cookies(driver: webdriver.Chrome, username: str | None = None) -> bool
             return False
 
         logging.info("Found %d saved session cookies in %s — restoring session...", len(cookies), target_file.name)
+
+        # 1. Set cookies via CDP Network.setCookies for atomic, lossless cookie injection
+        cdp_success = False
+        try:
+            cdp_cookies = []
+            for c in cookies:
+                if not isinstance(c, dict) or not c.get("name"):
+                    continue
+                item = {
+                    "name": c["name"],
+                    "value": c.get("value", ""),
+                    "domain": c.get("domain", ".instagram.com"),
+                    "path": c.get("path", "/"),
+                    "secure": c.get("secure", True),
+                    "httpOnly": c.get("httpOnly", False),
+                }
+                if c.get("sameSite") in ("Strict", "Lax", "None"):
+                    item["sameSite"] = c["sameSite"]
+                if c.get("expiry"):
+                    try:
+                        item["expires"] = float(c["expiry"])
+                    except Exception:
+                        pass
+                cdp_cookies.append(item)
+
+            if cdp_cookies:
+                driver.execute_cdp_cmd("Network.setCookies", {"cookies": cdp_cookies})
+                cdp_success = True
+                logging.info("Injected %d cookies via Chrome DevTools Protocol (CDP)", len(cdp_cookies))
+        except Exception as cdp_exc:
+            logging.debug("CDP cookie injection fallback: %s", cdp_exc)
+
+        # 2. Navigate to Instagram
         driver.get("https://www.instagram.com/")
-        pause(3)
+        pause(2.5)
         _dismiss_dialogs(driver)
 
-        added = 0
-        for cookie in cookies:
-            if not isinstance(cookie, dict):
-                continue
-            c = {
-                "name": cookie.get("name"),
-                "value": cookie.get("value"),
-                "path": cookie.get("path", "/"),
-            }
-            domain = cookie.get("domain", "")
-            if domain and ("instagram.com" in domain):
-                c["domain"] = domain
-            if "expiry" in cookie and cookie["expiry"] is not None:
-                try:
-                    c["expiry"] = int(float(cookie["expiry"]))
-                except (ValueError, TypeError):
-                    pass
-            if "secure" in cookie:
-                c["secure"] = bool(cookie["secure"])
-            if "httpOnly" in cookie:
-                c["httpOnly"] = bool(cookie["httpOnly"])
-            if cookie.get("sameSite") in ("Strict", "Lax", "None"):
-                c["sameSite"] = cookie["sameSite"]
-                if c["sameSite"] == "None":
-                    c["secure"] = True
+        # 3. Standard add_cookie fallback if CDP wasn't used
+        if not cdp_success:
+            added = 0
+            for cookie in cookies:
+                if not isinstance(cookie, dict):
+                    continue
+                c = {
+                    "name": cookie.get("name"),
+                    "value": cookie.get("value"),
+                    "path": cookie.get("path", "/"),
+                }
+                domain = cookie.get("domain", "")
+                if domain and ("instagram.com" in domain):
+                    c["domain"] = domain
+                if "expiry" in cookie and cookie["expiry"] is not None:
+                    try:
+                        c["expiry"] = int(float(cookie["expiry"]))
+                    except (ValueError, TypeError):
+                        pass
+                if "secure" in cookie:
+                    c["secure"] = bool(cookie["secure"])
+                if "httpOnly" in cookie:
+                    c["httpOnly"] = bool(cookie["httpOnly"])
+                if cookie.get("sameSite") in ("Strict", "Lax", "None"):
+                    c["sameSite"] = cookie["sameSite"]
+                    if c["sameSite"] == "None":
+                        c["secure"] = True
 
-            try:
-                driver.add_cookie(c)
-                added += 1
-            except Exception:
                 try:
-                    c_min = {"name": c["name"], "value": c["value"], "path": c.get("path", "/")}
-                    driver.add_cookie(c_min)
+                    driver.add_cookie(c)
                     added += 1
                 except Exception:
-                    pass
+                    try:
+                        c_min = {"name": c["name"], "value": c["value"], "path": c.get("path", "/")}
+                        driver.add_cookie(c_min)
+                        added += 1
+                    except Exception:
+                        pass
 
-        logging.info("Injected %d/%d session cookies into browser", added, len(cookies))
-        driver.get("https://www.instagram.com/")
-        pause(4)
-        _dismiss_dialogs(driver)
+            driver.get("https://www.instagram.com/")
+            pause(3)
+            _dismiss_dialogs(driver)
 
-        if _is_logged_in(driver):
-            logging.info("Session restored successfully from cookies — auto-login active.")
-            _save_cookies(driver, username=username)  # refresh saved cookies
-            return True
+        # 4. Verification with poll loop for SPA hydration
+        for _ in range(4):
+            _dismiss_dialogs(driver)
+            if _is_logged_in(driver):
+                logging.info("Session restored successfully from cookies — auto-login active.")
+                _save_cookies(driver, username=username)  # refresh saved cookies
+                return True
+            pause(1.5)
 
         logging.warning("Saved cookies expired or rejected by Instagram — fresh login required.")
         return False
@@ -609,13 +699,27 @@ def _execute_login_flow(driver: webdriver.Chrome, username: str, password: str) 
 
 
 def login_instagram(driver: webdriver.Chrome, username: str, password: str) -> bool:
-    """3-step login: cookies → auto login with slow typing → OTP wait → manual fallback."""
-    # Step 0: Try saved cookies for this username
+    """Multi-tier login: check active profile → restore cookies → auto login → OTP wait → manual fallback."""
+    # Step 0: Check if dedicated Chrome profile is ALREADY authenticated
+    try:
+        logging.info("Checking existing browser session for @%s...", username)
+        driver.get("https://www.instagram.com/")
+        pause(2.5)
+        _dismiss_dialogs(driver)
+        if _is_logged_in(driver):
+            logging.info("✅ Restored active session from Chrome profile for @%s", username)
+            _save_cookies(driver, username=username)
+            return True
+    except Exception as exc:
+        logging.debug("Initial profile session check: %s", exc)
+
+    # Step 1: Try restored cookies from disk
     if _load_cookies(driver, username=username):
         logging.info("✅ Restored existing Instagram session from cookies for @%s", username)
         return True
 
-    # Step 1: Automatic login with OTP and manual fallback
+    # Step 2: Automatic credential login with OTP and manual fallback
+    logging.info("No active session or valid cookies found for @%s — initiating login...", username)
     success = _execute_login_flow(driver, username, password)
     if success or _is_logged_in(driver):
         pause(2)

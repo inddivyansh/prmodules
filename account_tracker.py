@@ -54,7 +54,7 @@ def get_account_record(username: str) -> dict[str, Any]:
     })
 
 
-def update_account_record(username: str, **kwargs) -> dict[str, Any]:
+def update_account_record(username: str, /, **kwargs) -> dict[str, Any]:
     """Update fields for a specific account record."""
     clean = username.strip().lower()
     reg = _read_registry()
@@ -69,6 +69,7 @@ def update_account_record(username: str, **kwargs) -> dict[str, Any]:
         "last_error": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
+    kwargs.pop("username", None)
     rec.update(kwargs)
     reg[clean] = rec
     _write_registry(reg)
@@ -79,6 +80,7 @@ def record_session_start(username: str, ip: str, location: str = "") -> None:
     """Mark an account as actively engaged in an automation session."""
     clean = username.strip().lower()
     rec = get_account_record(clean)
+    rec.pop("username", None)
     rec["status"] = "active"
     rec["last_ip"] = ip or "UNKNOWN"
     rec["last_location"] = location or "UNKNOWN"
@@ -92,6 +94,7 @@ def record_session_end(username: str, comments_posted: int, status: str = "cooli
     """Record session outcome, increment posted counter, and enter cooldown."""
     clean = username.strip().lower()
     rec = get_account_record(clean)
+    rec.pop("username", None)
     rec["status"] = status
     rec["total_comments_posted"] = rec.get("total_comments_posted", 0) + max(0, comments_posted)
     rec["last_active"] = datetime.now(timezone.utc).isoformat()
